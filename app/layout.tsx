@@ -2,10 +2,9 @@ import './globals.css'
 import { Inter } from 'next/font/google'
 
 export const metadata = {
-  metadataBase: new URL('https://postgres-starter.vercel.app'),
-  title: 'Postgres Demo',
-  description:
-    'A simple Next.js app with a Postgres database',
+  metadataBase: new URL('https://ai-council.local'),
+  title: 'AI Council',
+  description: 'Configurable multi-persona AI discussion simulator',
 }
 
 const inter = Inter({
