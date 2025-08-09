@@ -1,7 +1,35 @@
 "use client"
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, useEffect } from 'react'
 import { AppConfig, Message, buildPrompt, defaultConfig, nextStep } from '@/lib/stateMachine'
+
+// Database-related types
+type WorkflowTemplate = {
+  id: number
+  name: string
+  description?: string
+  category: string
+  nodes: any[]
+  edges: any[]
+}
+
+type AgentTemplate = {
+  id: number
+  name: string
+  category: string
+  role: string
+  task: string
+  systemPrompt?: string
+  parameters?: Record<string, any>
+}
+
+type WorkflowExecution = {
+  id: number
+  workflowId: number
+  status: string
+  input?: Record<string, any>
+  output?: Record<string, any>
+}
 
 async function complete({ prompt, system }: { prompt: string; system: string }) {
   const res = await fetch('/api/complete', {
@@ -14,6 +42,31 @@ async function complete({ prompt, system }: { prompt: string; system: string }) 
   return (data?.text as string) || ''
 }
 
+async function fetchWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+  const res = await fetch('/api/workflow-templates')
+  if (!res.ok) throw new Error('Failed to fetch workflow templates')
+  const data = await res.json()
+  return data.templates || []
+}
+
+async function fetchAgentTemplates(): Promise<AgentTemplate[]> {
+  const res = await fetch('/api/agent-templates')
+  if (!res.ok) throw new Error('Failed to fetch agent templates')
+  const data = await res.json()
+  return data.templates || []
+}
+
+async function startWorkflowExecution(workflowId: number, input: Record<string, any>): Promise<WorkflowExecution> {
+  const res = await fetch('/api/workflow-executions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ workflowId, input }),
+  })
+  if (!res.ok) throw new Error('Failed to start workflow execution')
+  const data = await res.json()
+  return data.execution
+}
+
 export default function DebateArena() {
   const cfg = useMemo<AppConfig>(() => defaultConfig(), [])
   const [topic, setTopic] = useState('')
@@ -22,17 +75,21 @@ export default function DebateArena() {
   const [messages, setMessages] = useState<Message[]>([])
   const [debug, setDebug] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  
+  // Database integration state
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplate[]>([])
+  const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null)
+  const [useDatabase, setUseDatabase] = useState(false)
+  const [currentExecution, setCurrentExecution] = useState<WorkflowExecution | null>(null)
+
+  // Load workflow templates on component mount
+  useEffect(() => {
+    fetchWorkflowTemplates()
+      .then(setWorkflowTemplates)
+      .catch(e => setDebug(d => [...d, `Failed to load templates: ${e.message}`]))
+  }, [])
 
   const step = nextStep(cfg, cursor)
-
-  const onStart = useCallback(async () => {
-    setMessages([])
-    setContext('')
-    setCursor(0)
-    setDebug((d) => [...d, `Start: topic=${topic || '(empty)'}`])
-    if (!topic.trim()) return
-    await run()
-  }, [topic])
 
   const run = useCallback(async () => {
     const s = nextStep(cfg, cursor)
@@ -59,43 +116,133 @@ export default function DebateArena() {
     }
   }, [cfg, cursor, context, topic])
 
+  const onStart = useCallback(async () => {
+    setMessages([])
+    setContext('')
+    setCursor(0)
+    setCurrentExecution(null)
+    setDebug((d) => [...d, `Start: topic=${topic || '(empty)'}`])
+    if (!topic.trim()) return
+    
+    if (useDatabase && selectedTemplate) {
+      // Start database-backed workflow execution
+      setBusy(true)
+      try {
+        setDebug((d) => [...d, `Starting workflow template ${selectedTemplate}`])
+        const execution = await startWorkflowExecution(selectedTemplate, { topic })
+        setCurrentExecution(execution)
+        setDebug((d) => [...d, `Workflow execution ${execution.id} started (status: ${execution.status})`])
+        // Note: In a full implementation, we'd need to poll for completion or use websockets
+        // For now, we'll show that the execution started
+      } catch (e: any) {
+        setDebug((d) => [...d, `Error starting workflow: ${e?.message || e}`])
+      } finally {
+        setBusy(false)
+      }
+    } else {
+      // Use legacy state machine
+      await run()
+    }
+  }, [topic, useDatabase, selectedTemplate, run])
+
   const onContinue = useCallback(async () => {
     await run()
   }, [run])
 
   return (
     <div className="w-full max-w-5xl">
-      <section className="space-y-3">
-        <label className="block text-sm font-medium text-gray-700">Topic</label>
-        <textarea
-          className="w-full h-28 rounded-md border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-gray-800"
-          placeholder="e.g., What are the societal impacts of widespread AI adoption?"
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          disabled={busy}
-        />
+      <section className="space-y-4">
+        {/* Mode Selection */}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={useDatabase}
+              onChange={(e) => setUseDatabase(e.target.checked)}
+              disabled={busy}
+            />
+            Use Database Mode (with workflow templates)
+          </label>
+        </div>
+
+        {/* Workflow Template Selection */}
+        {useDatabase && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Workflow Template</label>
+            <select
+              className="w-full rounded-md border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-gray-800"
+              value={selectedTemplate || ''}
+              onChange={(e) => setSelectedTemplate(Number(e.target.value) || null)}
+              disabled={busy}
+            >
+              <option value="">Select a workflow template...</option>
+              {workflowTemplates.map(template => (
+                <option key={template.id} value={template.id}>
+                  {template.name} - {template.description}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Topic Input */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Topic</label>
+          <textarea
+            className="w-full h-28 rounded-md border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-gray-800"
+            placeholder="e.g., What are the societal impacts of widespread AI adoption?"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            disabled={busy}
+          />
+        </div>
+
+        {/* Action Buttons */}
         <div className="flex gap-3">
           <button
             onClick={onStart}
             className="rounded-md bg-black text-white px-4 py-2 text-sm hover:bg-gray-800 disabled:opacity-50"
-            disabled={busy}
+            disabled={busy || (useDatabase && !selectedTemplate)}
           >
             {busy ? 'Working…' : 'Start'}
           </button>
-          <button
-            onClick={onContinue}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
-            disabled={busy || !step || !topic.trim()}
-          >
-            Continue
-          </button>
+          {!useDatabase && (
+            <button
+              onClick={onContinue}
+              className="rounded-md border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+              disabled={busy || !step || !topic.trim()}
+            >
+              Continue
+            </button>
+          )}
         </div>
       </section>
 
       <section className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="rounded-lg border border-gray-200 p-4 bg-white/30 backdrop-blur-lg">
-          <h2 className="text-lg font-semibold mb-2">Transcript</h2>
-          {messages.length === 0 ? (
+          <h2 className="text-lg font-semibold mb-2">
+            Transcript 
+            {useDatabase && (
+              <span className="text-sm font-normal text-blue-600 ml-2">(Database Mode)</span>
+            )}
+          </h2>
+          
+          {/* Database execution status */}
+          {useDatabase && currentExecution && (
+            <div className="mb-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+              <div className="text-sm">
+                <strong>Execution #{currentExecution.id}</strong>
+                <span className="ml-2 px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">
+                  {currentExecution.status}
+                </span>
+              </div>
+              <div className="text-xs text-gray-600 mt-1">
+                Topic: {currentExecution.input?.topic}
+              </div>
+            </div>
+          )}
+          
+          {messages.length === 0 && !currentExecution ? (
             <p className="text-sm text-gray-600">No messages yet.</p>
           ) : (
             <div className="space-y-3">

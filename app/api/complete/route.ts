@@ -1,3 +1,7 @@
+import { rateLimit, defaultRateLimits, getClientIdentifier } from '../../../lib/ratelimit'
+import { completionRequestSchema, validateAndSanitizePrompt } from '../../../lib/validation'
+import { z } from 'zod'
+
 export const dynamic = 'force-dynamic'
 
 type Body = {
@@ -10,10 +14,40 @@ type Body = {
 
 export async function POST(req: Request) {
   try {
-    const { prompt, system, model, temperature = 0.7, max_tokens = 512 } = (await req.json()) as Body
-    if (!prompt || typeof prompt !== 'string') {
-      return Response.json({ error: 'Missing prompt' }, { status: 400 })
+    // Rate limiting
+    const clientId = getClientIdentifier(req)
+    const rateLimitResult = await rateLimit(clientId, defaultRateLimits.completion, 'completion')
+    
+    if (!rateLimitResult.success) {
+      return Response.json(
+        { error: 'Rate limit exceeded' },
+        { 
+          status: 429,
+          headers: {
+            'X-RateLimit-Limit': rateLimitResult.limit.toString(),
+            'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+            'X-RateLimit-Reset': rateLimitResult.reset.toString(),
+          }
+        }
+      )
     }
+
+    // Input validation
+    const body = await req.json()
+    const validationResult = completionRequestSchema.safeParse(body)
+    
+    if (!validationResult.success) {
+      return Response.json(
+        { error: 'Invalid input', details: validationResult.error.issues },
+        { status: 400 }
+      )
+    }
+
+    const { prompt, system, model, temperature = 0.7, maxTokens: max_tokens = 512 } = validationResult.data
+
+    // Sanitize prompt
+    const sanitizedPrompt = validateAndSanitizePrompt(prompt)
+    const sanitizedSystem = system ? validateAndSanitizePrompt(system) : undefined
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY
     const openaiKey = process.env.OPENAI_API_KEY
@@ -25,8 +59,8 @@ export async function POST(req: Request) {
         model: anthropicModel,
         max_tokens: max_tokens,
         temperature,
-        messages: [{ role: 'user', content: prompt }],
-        ...(system ? { system } : {}),
+        messages: [{ role: 'user', content: sanitizedPrompt }],
+        ...(sanitizedSystem ? { system: sanitizedSystem } : {}),
       }
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -43,7 +77,13 @@ export async function POST(req: Request) {
       }
       const data = (await res.json()) as any
       const text: string = data?.content?.[0]?.text ?? ''
-      return Response.json({ text })
+      return Response.json({ text }, {
+        headers: {
+          'X-RateLimit-Limit': rateLimitResult.limit.toString(),
+          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+          'X-RateLimit-Reset': rateLimitResult.reset.toString(),
+        }
+      })
     }
 
     if (openaiKey) {
@@ -53,8 +93,8 @@ export async function POST(req: Request) {
         temperature,
         max_tokens,
         messages: [
-          ...(system ? [{ role: 'system', content: system }] : []),
-          { role: 'user', content: prompt },
+          ...(sanitizedSystem ? [{ role: 'system', content: sanitizedSystem }] : []),
+          { role: 'user', content: sanitizedPrompt },
         ],
       }
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -71,12 +111,24 @@ export async function POST(req: Request) {
       }
       const data = (await res.json()) as any
       const text: string = data?.choices?.[0]?.message?.content ?? ''
-      return Response.json({ text })
+      return Response.json({ text }, {
+        headers: {
+          'X-RateLimit-Limit': rateLimitResult.limit.toString(),
+          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+          'X-RateLimit-Reset': rateLimitResult.reset.toString(),
+        }
+      })
     }
 
     // Mock fallback for local dev without keys
-    const mock = mockComplete({ prompt, system })
-    return Response.json({ text: mock })
+    const mock = mockComplete({ prompt: sanitizedPrompt, system: sanitizedSystem })
+    return Response.json({ text: mock }, {
+      headers: {
+        'X-RateLimit-Limit': rateLimitResult.limit.toString(),
+        'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+        'X-RateLimit-Reset': rateLimitResult.reset.toString(),
+      }
+    })
   } catch (err: any) {
     return Response.json({ error: err?.message || 'Unknown error' }, { status: 500 })
   }
