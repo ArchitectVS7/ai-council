@@ -4,7 +4,10 @@
       "Bash(npm update)",
       "Bash(npm install:*)",
       "Bash(npm run:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(mkdir:*)",
+      "Bash(git mv:*)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

@@ -2,9 +2,12 @@
 
 import { useCallback, useMemo, useState, useEffect } from 'react'
 import { AppConfig, Message, buildPrompt, defaultConfig, nextStep } from '@/lib/stateMachine'
+import { workflowTemplates, WorkflowTemplate } from '@/lib/creativeWorkflows'
+import { QuickTooltip } from '@/components/help/TooltipHelper'
+import { ContextHelpButton } from '@/components/help/HelpTrigger'
 
 // Database-related types
-type WorkflowTemplate = {
+type DatabaseWorkflowTemplate = {
   id: number
   name: string
   description?: string
@@ -42,7 +45,7 @@ async function complete({ prompt, system }: { prompt: string; system: string }) 
   return (data?.text as string) || ''
 }
 
-async function fetchWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+async function fetchWorkflowTemplates(): Promise<DatabaseWorkflowTemplate[]> {
   const res = await fetch('/api/workflow-templates')
   if (!res.ok) throw new Error('Failed to fetch workflow templates')
   const data = await res.json()
@@ -67,8 +70,7 @@ async function startWorkflowExecution(workflowId: number, input: Record<string, 
   return data.execution
 }
 
-export default function DebateArena() {
-  const cfg = useMemo<AppConfig>(() => defaultConfig(), [])
+export default function DiscussionArena() {
   const [topic, setTopic] = useState('')
   const [cursor, setCursor] = useState(0)
   const [context, setContext] = useState('')
@@ -76,17 +78,32 @@ export default function DebateArena() {
   const [debug, setDebug] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   
+  // Workflow selection state
+  const [selectedWorkflow, setSelectedWorkflow] = useState<string>('default')
+  const [useTemplate, setUseTemplate] = useState(false)
+  
   // Database integration state
-  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplate[]>([])
+  const [databaseTemplates, setDatabaseTemplates] = useState<DatabaseWorkflowTemplate[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null)
   const [useDatabase, setUseDatabase] = useState(false)
   const [currentExecution, setCurrentExecution] = useState<WorkflowExecution | null>(null)
 
+  // Generate config based on selected workflow
+  const cfg = useMemo<AppConfig>(() => {
+    if (useTemplate && selectedWorkflow && selectedWorkflow !== 'default') {
+      const template = workflowTemplates[selectedWorkflow as keyof typeof workflowTemplates]
+      if (template) {
+        return template.createConfig()
+      }
+    }
+    return defaultConfig()
+  }, [selectedWorkflow, useTemplate])
+
   // Load workflow templates on component mount
   useEffect(() => {
     fetchWorkflowTemplates()
-      .then(setWorkflowTemplates)
-      .catch(e => setDebug(d => [...d, `Failed to load templates: ${e.message}`]))
+      .then(setDatabaseTemplates)
+      .catch(e => setDebug(d => [...d, `Failed to load database templates: ${e.message}`]))
   }, [])
 
   const step = nextStep(cfg, cursor)
@@ -121,7 +138,11 @@ export default function DebateArena() {
     setContext('')
     setCursor(0)
     setCurrentExecution(null)
-    setDebug((d) => [...d, `Start: topic=${topic || '(empty)'}`])
+    
+    const workflowInfo = useTemplate && selectedWorkflow !== 'default' 
+      ? `workflow=${selectedWorkflow}` 
+      : 'default'
+    setDebug((d) => [...d, `Start: ${workflowInfo}, topic=${topic || '(empty)'}`])
     if (!topic.trim()) return
     
     if (useDatabase && selectedTemplate) {
@@ -143,7 +164,7 @@ export default function DebateArena() {
       // Use legacy state machine
       await run()
     }
-  }, [topic, useDatabase, selectedTemplate, run])
+  }, [topic, useDatabase, selectedTemplate, useTemplate, selectedWorkflow, run])
 
   const onContinue = useCallback(async () => {
     await run()
@@ -152,7 +173,44 @@ export default function DebateArena() {
   return (
     <div className="w-full max-w-5xl">
       <section className="space-y-4">
-        {/* Mode Selection */}
+        {/* Workflow Template Selection */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={useTemplate}
+                onChange={(e) => setUseTemplate(e.target.checked)}
+                disabled={busy}
+              />
+              Use Creative Workflow Template
+            </label>
+          </div>
+
+          {useTemplate && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select Workflow</label>
+              <select
+                className="w-full rounded-md border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-gray-800"
+                value={selectedWorkflow}
+                onChange={(e) => setSelectedWorkflow(e.target.value)}
+                disabled={busy}
+              >
+                <option value="default">Default Discussion (3 personas)</option>
+                <option value="creative-project">Creative Project Development (5 personas)</option>
+                <option value="product-strategy">Product Strategy Development (5 personas)</option>
+                <option value="game-development">Game Development Ideation (6 personas)</option>
+              </select>
+              {selectedWorkflow !== 'default' && workflowTemplates[selectedWorkflow as keyof typeof workflowTemplates] && (
+                <p className="text-sm text-gray-600 mt-1">
+                  {workflowTemplates[selectedWorkflow as keyof typeof workflowTemplates].description}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Database Mode Selection */}
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -161,22 +219,22 @@ export default function DebateArena() {
               onChange={(e) => setUseDatabase(e.target.checked)}
               disabled={busy}
             />
-            Use Database Mode (with workflow templates)
+            Use Database Mode (experimental)
           </label>
         </div>
 
-        {/* Workflow Template Selection */}
+        {/* Database Workflow Template Selection */}
         {useDatabase && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Workflow Template</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Database Workflow Template</label>
             <select
               className="w-full rounded-md border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-gray-800"
               value={selectedTemplate || ''}
               onChange={(e) => setSelectedTemplate(Number(e.target.value) || null)}
               disabled={busy}
             >
-              <option value="">Select a workflow template...</option>
-              {workflowTemplates.map(template => (
+              <option value="">Select a database workflow template...</option>
+              {databaseTemplates.map(template => (
                 <option key={template.id} value={template.id}>
                   {template.name} - {template.description}
                 </option>
@@ -185,47 +243,59 @@ export default function DebateArena() {
           </div>
         )}
 
-        {/* Topic Input */}
+        {/* Project/Topic Input */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Topic</label>
-          <textarea
-            className="w-full h-28 rounded-md border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-gray-800"
-            placeholder="e.g., What are the societal impacts of widespread AI adoption?"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            disabled={busy}
-          />
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-700">Project Brief</label>
+            <ContextHelpButton context="discussions" size="sm" />
+          </div>
+          <QuickTooltip id="topic-input">
+            <textarea
+              className="w-full h-28 rounded-md border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-gray-800"
+              placeholder="e.g., I want to create a mobile game about space wizards in cosmic combat with alien gods"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              disabled={busy}
+            />
+          </QuickTooltip>
         </div>
 
         {/* Action Buttons */}
         <div className="flex gap-3">
-          <button
-            onClick={onStart}
-            className="rounded-md bg-black text-white px-4 py-2 text-sm hover:bg-gray-800 disabled:opacity-50"
-            disabled={busy || (useDatabase && !selectedTemplate)}
-          >
-            {busy ? 'Working…' : 'Start'}
-          </button>
-          {!useDatabase && (
+          <QuickTooltip id="start-button">
             <button
-              onClick={onContinue}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
-              disabled={busy || !step || !topic.trim()}
+              onClick={onStart}
+              className="rounded-md bg-black text-white px-4 py-2 text-sm hover:bg-gray-800 disabled:opacity-50"
+              disabled={busy || (useDatabase && !selectedTemplate)}
             >
-              Continue
+              {busy ? 'Working…' : 'Begin Session'}
             </button>
+          </QuickTooltip>
+          {!useDatabase && (
+            <QuickTooltip id="continue-button">
+              <button
+                onClick={onContinue}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 disabled:opacity-50"
+                disabled={busy || !step || !topic.trim()}
+              >
+                Continue
+              </button>
+            </QuickTooltip>
           )}
         </div>
       </section>
 
       <section className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="rounded-lg border border-gray-200 p-4 bg-white/30 backdrop-blur-lg">
-          <h2 className="text-lg font-semibold mb-2">
-            Transcript 
-            {useDatabase && (
-              <span className="text-sm font-normal text-blue-600 ml-2">(Database Mode)</span>
-            )}
-          </h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold">
+              Discussion Transcript 
+              {useDatabase && (
+                <span className="text-sm font-normal text-blue-600 ml-2">(Database Mode)</span>
+              )}
+            </h2>
+            <ContextHelpButton context="discussions" size="sm" />
+          </div>
           
           {/* Database execution status */}
           {useDatabase && currentExecution && (
@@ -256,15 +326,20 @@ export default function DebateArena() {
           )}
         </div>
         <div className="rounded-lg border border-gray-200 p-4 bg-white/30 backdrop-blur-lg">
-          <h2 className="text-lg font-semibold mb-2">Debug Log</h2>
-          <div className="text-xs text-gray-700 space-y-1 max-h-56 overflow-auto">
-            {debug.length === 0 && (
-              <p className="text-gray-500">No events yet.</p>
-            )}
-            {debug.map((line, i) => (
-              <div key={i}>• {line}</div>
-            ))}
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold">Debug Log</h2>
+            <ContextHelpButton context="discussions" size="sm" />
           </div>
+          <QuickTooltip id="debug-log">
+            <div className="text-xs text-gray-700 space-y-1 max-h-56 overflow-auto">
+              {debug.length === 0 && (
+                <p className="text-gray-500">No events yet.</p>
+              )}
+              {debug.map((line, i) => (
+                <div key={i}>• {line}</div>
+              ))}
+            </div>
+          </QuickTooltip>
         </div>
       </section>
     </div>

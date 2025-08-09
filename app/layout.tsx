@@ -1,5 +1,9 @@
 import './globals.css'
 import { Inter } from 'next/font/google'
+import { HelpProvider } from '@/components/help/HelpProvider'
+import HelpSystem from '@/components/help/HelpSystem'
+import GuidedTour from '@/components/help/GuidedTour'
+import OnboardingFlow from '@/components/help/OnboardingFlow'
 
 export const metadata = {
   metadataBase: new URL('https://ai-council.local'),
@@ -20,7 +24,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.variable}>{children}</body>
+      <body className={inter.variable}>
+        <HelpProvider>
+          {children}
+          <HelpSystem />
+          <GuidedTour />
+          <OnboardingFlow />
+        </HelpProvider>
+      </body>
     </html>
   )
 }

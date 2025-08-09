@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { z } from 'zod'
+import { QuickTooltip } from '@/components/help/TooltipHelper'
 
 // Types
 type PersonaFormData = {
@@ -156,17 +157,19 @@ export default function PersonaForm({
           <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
             Name *
           </label>
-          <input
-            type="text"
-            id="name"
-            value={formData.name}
-            onChange={(e) => handleInputChange('name', e.target.value)}
-            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.name ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="e.g., Empathy Advocate"
-            disabled={isSubmitting}
-          />
+          <QuickTooltip id="persona-name">
+            <input
+              type="text"
+              id="name"
+              value={formData.name}
+              onChange={(e) => handleInputChange('name', e.target.value)}
+              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.name ? 'border-red-500' : 'border-gray-300'
+              }`}
+              placeholder="e.g., Empathy Advocate"
+              disabled={isSubmitting}
+            />
+          </QuickTooltip>
           {errors.name && <p className="mt-1 text-sm text-red-600">{errors.name}</p>}
         </div>
 
@@ -175,17 +178,19 @@ export default function PersonaForm({
           <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
             Role *
           </label>
-          <input
-            type="text"
-            id="role"
-            value={formData.role}
-            onChange={(e) => handleInputChange('role', e.target.value)}
-            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.role ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="e.g., Empathy Advocate"
-            disabled={isSubmitting}
-          />
+          <QuickTooltip id="persona-role">
+            <input
+              type="text"
+              id="role"
+              value={formData.role}
+              onChange={(e) => handleInputChange('role', e.target.value)}
+              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.role ? 'border-red-500' : 'border-gray-300'
+              }`}
+              placeholder="e.g., Empathy Advocate"
+              disabled={isSubmitting}
+            />
+          </QuickTooltip>
           {errors.role && <p className="mt-1 text-sm text-red-600">{errors.role}</p>}
         </div>
 
@@ -194,17 +199,19 @@ export default function PersonaForm({
           <label htmlFor="task" className="block text-sm font-medium text-gray-700 mb-2">
             Task *
           </label>
-          <textarea
-            id="task"
-            value={formData.task}
-            onChange={(e) => handleInputChange('task', e.target.value)}
-            rows={3}
-            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.task ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="e.g., Consider human impact, ethics, and inclusion"
-            disabled={isSubmitting}
-          />
+          <QuickTooltip id="persona-task">
+            <textarea
+              id="task"
+              value={formData.task}
+              onChange={(e) => handleInputChange('task', e.target.value)}
+              rows={3}
+              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.task ? 'border-red-500' : 'border-gray-300'
+              }`}
+              placeholder="e.g., Consider human impact, ethics, and inclusion"
+              disabled={isSubmitting}
+            />
+          </QuickTooltip>
           {errors.task && <p className="mt-1 text-sm text-red-600">{errors.task}</p>}
         </div>
 

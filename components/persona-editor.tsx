@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import PersonaList from './persona-list'
 import PersonaForm from './persona-form'
+import { ContextHelpButton } from '@/components/help/HelpTrigger'
 
 // Types
 type Persona = {
@@ -239,10 +240,15 @@ export default function PersonaEditor({ className = '' }: PersonaEditorProps) {
       {/* Main Content */}
       <div>
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Persona Editor</h1>
-          <p className="mt-2 text-gray-600">
-            Create and manage AI personas for your debates. Each persona represents a different perspective or role.
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Persona Editor</h1>
+              <p className="mt-2 text-gray-600">
+                Create and manage AI personas for your debates. Each persona represents a different perspective or role.
+              </p>
+            </div>
+            <ContextHelpButton context="personas" />
+          </div>
         </div>
 
         <PersonaList
