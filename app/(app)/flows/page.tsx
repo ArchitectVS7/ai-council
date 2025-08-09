@@ -88,7 +88,7 @@ export default function FlowsPage() {
               + Create New Flow
             </button>
             <Link
-              href="/app/templates"
+              href="/templates"
               className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md transition-colors"
             >
               Browse Templates
@@ -147,7 +147,7 @@ export default function FlowsPage() {
                     Edit
                   </button>
                   <Link
-                    href={`/app/discussion?flow=${flow.id}`}
+                    href={`/discussion?flow=${flow.id}`}
                     className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-md text-sm text-center transition-colors"
                   >
                     Use

@@ -80,7 +80,7 @@ export default function TemplatesPage() {
 
   const handleUseTemplate = (templateId: string) => {
     // In real app, this would set up the discussion with the selected template
-    window.location.href = `/app/discussion?template=${templateId}`
+    window.location.href = `/discussion?template=${templateId}`
   }
 
   return (
@@ -96,7 +96,7 @@ export default function TemplatesPage() {
           </div>
           <div className="flex space-x-3">
             <Link
-              href="/app/flows"
+              href="/flows"
               className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md transition-colors"
             >
               Create Custom Flow
@@ -233,7 +233,7 @@ export default function TemplatesPage() {
                 </button>
               )}
               <Link
-                href="/app/flows"
+                href="/flows"
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors inline-block"
               >
                 Create Custom Flow
@@ -251,7 +251,7 @@ export default function TemplatesPage() {
           </p>
           <div className="mt-6 space-x-4">
             <Link
-              href="/app/flows"
+              href="/flows"
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-md transition-colors inline-block"
             >
               Create Flow

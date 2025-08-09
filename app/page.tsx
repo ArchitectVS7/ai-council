@@ -74,7 +74,7 @@ export default function LandingPage() {
             
             <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                href="/app/dashboard"
+                href="/dashboard"
                 className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-lg text-lg font-medium transition-colors"
               >
                 Get Started Free
@@ -169,7 +169,7 @@ export default function LandingPage() {
             </p>
             <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                href="/app/dashboard"
+                href="/dashboard"
                 className="bg-white hover:bg-gray-100 text-blue-600 px-8 py-4 rounded-lg text-lg font-medium transition-colors"
               >
                 Start Free Trial
@@ -203,9 +203,9 @@ export default function LandingPage() {
               <div>
                 <h3 className="font-semibold mb-4">Product</h3>
                 <ul className="space-y-2 text-gray-400">
-                  <li><Link href="/app/templates" className="hover:text-white transition-colors">Templates</Link></li>
-                  <li><Link href="/app/personas" className="hover:text-white transition-colors">Personas</Link></li>
-                  <li><Link href="/app/flows" className="hover:text-white transition-colors">Flows</Link></li>
+                  <li><Link href="/templates" className="hover:text-white transition-colors">Templates</Link></li>
+                  <li><Link href="/personas" className="hover:text-white transition-colors">Personas</Link></li>
+                  <li><Link href="/flows" className="hover:text-white transition-colors">Flows</Link></li>
                 </ul>
               </div>
               

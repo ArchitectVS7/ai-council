@@ -1,7 +1,7 @@
 "use client"
 
 import { DashboardLayout } from '@/components/layout/AppLayout'
-import { PersonaEditor } from '@/components/persona-editor'
+import PersonaEditor from '@/components/persona-editor'
 import { useState } from 'react'
 
 export default function PersonasPage() {

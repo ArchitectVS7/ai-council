@@ -117,7 +117,7 @@ export default function SessionsPage() {
             </p>
           </div>
           <Link
-            href="/app/discussion"
+            href="/discussion"
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors"
           >
             + New Session
@@ -214,7 +214,7 @@ export default function SessionsPage() {
 
                   <div className="flex items-center space-x-3 ml-6">
                     <Link
-                      href={`/app/sessions/${session.id}`}
+                      href={`/sessions/${session.id}`}
                       className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm transition-colors"
                     >
                       View
@@ -222,7 +222,7 @@ export default function SessionsPage() {
                     
                     {session.status === 'in-progress' && (
                       <Link
-                        href={`/app/discussion?resume=${session.id}`}
+                        href={`/discussion?resume=${session.id}`}
                         className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"
                       >
                         Resume
@@ -259,7 +259,7 @@ export default function SessionsPage() {
               }
             </p>
             <Link
-              href="/app/discussion"
+              href="/discussion"
               className="mt-4 inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-md transition-colors"
             >
               Start New Session

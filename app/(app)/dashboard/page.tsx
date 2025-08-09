@@ -41,7 +41,7 @@ export default function DashboardPage() {
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Link
-            href="/app/discussion"
+            href="/discussion"
             className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg p-6 transition-colors group"
           >
             <div className="flex items-center">
@@ -56,7 +56,7 @@ export default function DashboardPage() {
           </Link>
 
           <Link
-            href="/app/flows"
+            href="/flows"
             className="bg-white hover:bg-gray-50 border border-gray-200 rounded-lg p-6 transition-colors group"
           >
             <div className="flex items-center">
@@ -71,7 +71,7 @@ export default function DashboardPage() {
           </Link>
 
           <Link
-            href="/app/personas"
+            href="/personas"
             className="bg-white hover:bg-gray-50 border border-gray-200 rounded-lg p-6 transition-colors group"
           >
             <div className="flex items-center">
@@ -86,7 +86,7 @@ export default function DashboardPage() {
           </Link>
 
           <Link
-            href="/app/sessions"
+            href="/sessions"
             className="bg-white hover:bg-gray-50 border border-gray-200 rounded-lg p-6 transition-colors group"
           >
             <div className="flex items-center">
@@ -133,7 +133,7 @@ export default function DashboardPage() {
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <h2 className="text-lg font-medium text-gray-900">Recent Sessions</h2>
             <Link 
-              href="/app/sessions"
+              href="/sessions"
               className="text-blue-600 hover:text-blue-700 text-sm font-medium"
             >
               View All
@@ -159,7 +159,7 @@ export default function DashboardPage() {
                     </span>
                     <span className="text-sm text-gray-500">{session.date}</span>
                     <Link
-                      href={`/app/sessions/${session.id}`}
+                      href={`/sessions/${session.id}`}
                       className="text-blue-600 hover:text-blue-700 text-sm font-medium"
                     >
                       View →

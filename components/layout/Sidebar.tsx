@@ -14,49 +14,49 @@ export default function Sidebar({ isOpen = true, onClose }: SidebarProps) {
   const navigationItems = [
     {
       name: 'Dashboard',
-      href: '/app/dashboard',
+      href: '/dashboard',
       icon: '🏠',
       description: 'Overview and quick actions'
     },
     {
       name: 'New Discussion',
-      href: '/app/discussion',
+      href: '/discussion',
       icon: '💬',
       description: 'Start a new collaborative session'
     },
     {
       name: 'Flow Management',
-      href: '/app/flows',
+      href: '/flows',
       icon: '🔄',
       description: 'Create and edit discussion flows'
     },
     {
       name: 'Persona Library',
-      href: '/app/personas',
+      href: '/personas',
       icon: '👥',
       description: 'Manage AI expert personas'
     },
     {
       name: 'Session History',
-      href: '/app/sessions',
+      href: '/sessions',
       icon: '📚',
       description: 'View past discussions and results'
     },
     {
       name: 'Templates',
-      href: '/app/templates',
+      href: '/templates',
       icon: '📋',
       description: 'Workflow templates and presets'
     },
     {
       name: 'Import/Export',
-      href: '/app/import-export',
+      href: '/import-export',
       icon: '📁',
       description: 'Backup and share configurations'
     },
     {
       name: 'Settings',
-      href: '/app/settings',
+      href: '/settings',
       icon: '⚙️',
       description: 'Profile and preferences'
     }
