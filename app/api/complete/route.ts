@@ -53,39 +53,7 @@ export async function POST(req: Request) {
     const openaiKey = process.env.OPENAI_API_KEY
 
     // Choose provider by env/model hint, else mock.
-    if (anthropicKey) {
-      const anthropicModel = model || 'claude-3-5-sonnet-latest'
-      const body = {
-        model: anthropicModel,
-        max_tokens: max_tokens,
-        temperature,
-        messages: [{ role: 'user', content: sanitizedPrompt }],
-        ...(sanitizedSystem ? { system: sanitizedSystem } : {}),
-      }
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        return Response.json({ error: `Anthropic error: ${text}` }, { status: res.status })
-      }
-      const data = (await res.json()) as any
-      const text: string = data?.content?.[0]?.text ?? ''
-      return Response.json({ text }, {
-        headers: {
-          'X-RateLimit-Limit': rateLimitResult.limit.toString(),
-          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
-          'X-RateLimit-Reset': rateLimitResult.reset.toString(),
-        }
-      })
-    }
-
+    // Prioritize OpenAI if both keys are present
     if (openaiKey) {
       const openaiModel = model || 'gpt-4o-mini'
       const body = {
@@ -111,6 +79,39 @@ export async function POST(req: Request) {
       }
       const data = (await res.json()) as any
       const text: string = data?.choices?.[0]?.message?.content ?? ''
+      return Response.json({ text }, {
+        headers: {
+          'X-RateLimit-Limit': rateLimitResult.limit.toString(),
+          'X-RateLimit-Remaining': rateLimitResult.remaining.toString(),
+          'X-RateLimit-Reset': rateLimitResult.reset.toString(),
+        }
+      })
+    }
+
+    if (anthropicKey) {
+      const anthropicModel = model || 'claude-3-5-sonnet-latest'
+      const body = {
+        model: anthropicModel,
+        max_tokens: max_tokens,
+        temperature,
+        messages: [{ role: 'user', content: sanitizedPrompt }],
+        ...(sanitizedSystem ? { system: sanitizedSystem } : {}),
+      }
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        return Response.json({ error: `Anthropic error: ${text}` }, { status: res.status })
+      }
+      const data = (await res.json()) as any
+      const text: string = data?.content?.[0]?.text ?? ''
       return Response.json({ text }, {
         headers: {
           'X-RateLimit-Limit': rateLimitResult.limit.toString(),

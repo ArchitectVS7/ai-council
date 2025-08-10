@@ -17,9 +17,30 @@ export async function rateLimit(
   config: RateLimitConfig,
   action: string
 ): Promise<{ success: boolean; limit: number; remaining: number; reset: number }> {
+  // For local development, skip rate limiting entirely
+  if (process.env.NODE_ENV === 'development') {
+    return {
+      success: true,
+      limit: config.requests,
+      remaining: config.requests - 1,
+      reset: Math.floor(Date.now() / 1000) + config.window,
+    }
+  }
+  
   const key = `ratelimit:${action}:${identifier}`
   
   try {
+    // Check if KV is properly configured
+    if (!process.env.KV_URL && !process.env.KV_REST_API_URL) {
+      console.warn('Vercel KV not configured, skipping rate limiting')
+      return {
+        success: true,
+        limit: config.requests,
+        remaining: config.requests - 1,
+        reset: Math.floor(Date.now() / 1000) + config.window,
+      }
+    }
+    
     const current = await kv.get<number>(key) || 0
     const now = Math.floor(Date.now() / 1000)
     const windowStart = Math.floor(now / config.window) * config.window

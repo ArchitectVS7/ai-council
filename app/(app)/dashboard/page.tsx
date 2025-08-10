@@ -1,30 +1,24 @@
 import { DashboardLayout } from '@/components/layout/AppLayout'
 import Link from 'next/link'
+import { getDashboardStats } from '@/lib/db/queries'
 
-export default function DashboardPage() {
-  // Mock data for demonstration
-  const recentSessions = [
-    {
-      id: '1',
-      title: 'Space Wizards Mobile Game',
-      template: 'Game Development Ideation',
-      date: '2025-01-08',
-      status: 'completed'
-    },
-    {
-      id: '2', 
-      title: 'Sustainable Transportation Strategy',
-      template: 'Product Strategy Development',
-      date: '2025-01-07',
-      status: 'in-progress'
-    }
-  ]
+export default async function DashboardPage() {
+  const { stats, recentDebates, recentExecutions } = await getDashboardStats()
+  
+  // Transform debates into sessions format for display
+  const recentSessions = recentDebates.map(debate => ({
+    id: debate.id.toString(),
+    title: debate.topic,
+    template: 'Debate Session',
+    date: debate.createdAt ? new Date(debate.createdAt).toISOString().split('T')[0] : 'Unknown',
+    status: debate.status === 'completed' ? 'completed' : 'in-progress'
+  }))
 
   const quickStats = {
-    totalSessions: 12,
-    activeFlows: 5,
-    customPersonas: 8,
-    totalPersonas: 23
+    totalSessions: stats.totalDebates,
+    activeFlows: stats.workflowTemplates,
+    customPersonas: Math.max(0, stats.agentTemplates - 13), // Subtract default templates
+    totalPersonas: stats.agentTemplates
   }
 
   return (

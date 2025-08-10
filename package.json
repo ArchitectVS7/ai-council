@@ -11,8 +11,10 @@
     "start": "next start",
     "lint": "next lint",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:migrate": "node scripts/migrate.js",
+    "db:studio": "drizzle-kit studio",
+    "seed": "node scripts/seed.js",
+    "test-api": "node scripts/test-api.js"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
@@ -22,6 +24,7 @@
     "@types/react-dom": "^19.0.0",
     "@vercel/kv": "^3.0.0",
     "autoprefixer": "10.4.16",
+    "dotenv": "^17.2.1",
     "drizzle-kit": "^0.31.4",
     "drizzle-orm": "^0.44.4",
     "eslint": "^8",
