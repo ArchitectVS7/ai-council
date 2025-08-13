@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useHelp, TourStep } from './HelpProvider'
 
 type GuidedTourProps = {
@@ -27,41 +27,7 @@ export default function GuidedTour({}: GuidedTourProps) {
   const isLastStep = activeTour ? activeTour.currentStep === activeTour.steps.length - 1 : false
   const isFirstStep = activeTour ? activeTour.currentStep === 0 : false
 
-  useEffect(() => {
-    if (activeTour && currentStep) {
-      positionHighlightAndTooltip()
-      setIsHighlightVisible(true)
-      
-      // Track tour step view
-      trackHelpInteraction('tour_step_viewed', undefined, `${activeTour.id}_${currentStep.id}`)
-    } else {
-      setIsHighlightVisible(false)
-    }
-  }, [activeTour, currentStep, trackHelpInteraction])
-
-  useEffect(() => {
-    const handleResize = () => {
-      if (activeTour && currentStep) {
-        positionHighlightAndTooltip()
-      }
-    }
-
-    const handleScroll = () => {
-      if (activeTour && currentStep) {
-        positionHighlightAndTooltip()
-      }
-    }
-
-    window.addEventListener('resize', handleResize)
-    window.addEventListener('scroll', handleScroll)
-
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      window.removeEventListener('scroll', handleScroll)
-    }
-  }, [activeTour, currentStep])
-
-  const positionHighlightAndTooltip = () => {
+  const positionHighlightAndTooltip = useCallback(() => {
     if (!currentStep) return
 
     const targetElement = document.querySelector(currentStep.target) as HTMLElement
@@ -89,36 +55,32 @@ export default function GuidedTour({}: GuidedTourProps) {
       let tooltipTop = 0
       let tooltipLeft = 0
 
-      const placement = currentStep.placement || 'bottom'
-
-      switch (placement) {
-        case 'top':
-          tooltipTop = rect.top - tooltipRect.height - 16
-          tooltipLeft = rect.left + (rect.width - tooltipRect.width) / 2
-          break
-        case 'bottom':
-          tooltipTop = rect.bottom + 16
-          tooltipLeft = rect.left + (rect.width - tooltipRect.width) / 2
-          break
-        case 'left':
-          tooltipTop = rect.top + (rect.height - tooltipRect.height) / 2
-          tooltipLeft = rect.left - tooltipRect.width - 16
-          break
-        case 'right':
-          tooltipTop = rect.top + (rect.height - tooltipRect.height) / 2
-          tooltipLeft = rect.right + 16
-          break
+      // Try to position tooltip to the right of the target
+      if (rect.right + 320 <= viewportWidth) {
+        tooltipLeft = rect.right + 16
+        tooltipTop = rect.top + (rect.height / 2) - (tooltipRect.height / 2)
+      }
+      // Try to position tooltip to the left of the target
+      else if (rect.left - 320 >= 0) {
+        tooltipLeft = rect.left - 320 - 16
+        tooltipTop = rect.top + (rect.height / 2) - (tooltipRect.height / 2)
+      }
+      // Position tooltip below the target
+      else if (rect.bottom + tooltipRect.height + 16 <= viewportHeight) {
+        tooltipLeft = rect.left + (rect.width / 2) - (tooltipRect.width / 2)
+        tooltipTop = rect.bottom + 16
+      }
+      // Position tooltip above the target
+      else {
+        tooltipLeft = rect.left + (rect.width / 2) - (tooltipRect.width / 2)
+        tooltipTop = rect.top - tooltipRect.height - 16
       }
 
-      // Adjust for viewport bounds
-      if (tooltipLeft < 16) tooltipLeft = 16
-      if (tooltipLeft + tooltipRect.width > viewportWidth - 16) {
-        tooltipLeft = viewportWidth - tooltipRect.width - 16
-      }
-      if (tooltipTop < 16) tooltipTop = 16
-      if (tooltipTop + tooltipRect.height > viewportHeight - 16) {
-        tooltipTop = viewportHeight - tooltipRect.height - 16
-      }
+      // Ensure tooltip stays within viewport horizontally
+      tooltipLeft = Math.max(16, Math.min(tooltipLeft, viewportWidth - tooltipRect.width - 16))
+      
+      // Ensure tooltip stays within viewport vertically
+      tooltipTop = Math.max(16, Math.min(tooltipTop, viewportHeight - tooltipRect.height - 16))
 
       setTooltipPosition({ top: tooltipTop, left: tooltipLeft })
     }
@@ -129,7 +91,41 @@ export default function GuidedTour({}: GuidedTourProps) {
       block: 'center',
       inline: 'center'
     })
-  }
+  }, [currentStep])
+
+  useEffect(() => {
+    if (activeTour && currentStep) {
+      positionHighlightAndTooltip()
+      setIsHighlightVisible(true)
+      
+      // Track tour step view
+      trackHelpInteraction('tour_step_viewed', undefined, `${activeTour.id}_${currentStep.id}`)
+    } else {
+      setIsHighlightVisible(false)
+    }
+  }, [activeTour, currentStep, trackHelpInteraction, positionHighlightAndTooltip])
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (activeTour && currentStep) {
+        positionHighlightAndTooltip()
+      }
+    }
+
+    const handleScroll = () => {
+      if (activeTour && currentStep) {
+        positionHighlightAndTooltip()
+      }
+    }
+
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('scroll', handleScroll)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('scroll', handleScroll)
+    }
+  }, [activeTour, currentStep, positionHighlightAndTooltip])
 
   const handleNext = () => {
     if (isLastStep) {

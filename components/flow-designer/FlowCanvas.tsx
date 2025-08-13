@@ -30,7 +30,7 @@ export default function FlowCanvas({ children, onPersonaDrop }: FlowCanvasProps)
 
   return (
     <div
-      ref={drop}
+      ref={drop as any}
       className={`flex-1 bg-gray-50 relative ${
         isOver ? 'bg-blue-50 border-2 border-blue-300 border-dashed' : ''
       }`}

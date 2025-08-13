@@ -43,7 +43,7 @@ export class PDFGenerator {
         footerTemplate: this.generateFooter(content),
       });
 
-      return pdfBuffer;
+      return Buffer.from(pdfBuffer);
     } finally {
       await page.close();
     }

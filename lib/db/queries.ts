@@ -85,7 +85,7 @@ export async function getDebatesWithMessages() {
   const db = getDb()
   
   try {
-    const debates = await db
+    const debateList = await db
       .select()
       .from(debates)
       .orderBy(desc(debates.createdAt))
@@ -93,7 +93,7 @@ export async function getDebatesWithMessages() {
     
     // Get messages for each debate
     const debatesWithMessages = await Promise.all(
-      debates.map(async (debate) => {
+      debateList.map(async (debate) => {
         const messages = await db
           .select()
           .from(debateMessages)

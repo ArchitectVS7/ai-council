@@ -28,9 +28,9 @@ export class DOCXGenerator {
         },
         children: [
           ...this.generateTitlePage(content, template),
-          new PageBreak(),
+          new Paragraph({ children: [new PageBreak()] }),
           ...this.generateTableOfContents(relevantSections),
-          new PageBreak(),
+          new Paragraph({ children: [new PageBreak()] }),
           ...this.generateDocContent(content, relevantSections, formatting),
           ...this.generateDocAppendices(content),
         ],
@@ -262,14 +262,14 @@ export class DOCXGenerator {
             }),
             new TextRun({
               text: `\t${index + 3}`,
-              tabStops: [{
-                type: "right",
-                position: 8000,
-                leader: "dot",
-              }],
             }),
           ],
           spacing: { after: 120 },
+          tabStops: [{
+            type: "right" as any,
+            position: 8000,
+            leader: "dot" as any,
+          }],
         })
       );
     });
@@ -369,7 +369,7 @@ export class DOCXGenerator {
               children: [
                 new TextRun({
                   text: content.mainContent,
-                  highlight: formatting.branding?.colorScheme?.[2]?.replace('#', '') || 'FFFF00',
+                  highlight: 'yellow',
                 }),
               ],
               spacing: { after: 240 },
@@ -412,7 +412,7 @@ export class DOCXGenerator {
     }
 
     const appendixElements: Paragraph[] = [
-      new PageBreak(),
+      new Paragraph({ children: [new PageBreak()] }),
       new Paragraph({
         children: [
           new TextRun({

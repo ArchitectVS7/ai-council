@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useCallback, useMemo } from 'react';
-import ReactFlow, {
+import {
+  ReactFlow,
   Node,
   Edge,
   addEdge,
@@ -132,7 +133,7 @@ export default function FlowDesigner({
       id: node.id,
       type: node.type as 'persona' | 'decision' | 'synthesis',
       position: node.position,
-      data: node.data,
+      data: node.data as any,
     }));
 
     const flowEdges: FlowEdge[] = edges.map(edge => ({

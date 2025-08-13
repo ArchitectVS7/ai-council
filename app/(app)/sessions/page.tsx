@@ -6,8 +6,8 @@ export default async function SessionsPage() {
   const debates = await getDebatesWithMessages()
   
   // Transform debates to sessions format for display
-  const sessions = debates.map(debate => ({
-    id: debate.id.toString(),
+  const sessions = debates.map((debate: any) => ({
+    id: (debate.id || 0).toString(),
     title: debate.topic,
     template: 'Debate Session',
     status: debate.status as 'completed' | 'in-progress' | 'draft',
@@ -15,7 +15,7 @@ export default async function SessionsPage() {
     updatedAt: debate.updatedAt?.toISOString() || new Date().toISOString(),
     duration: calculateDuration(debate.startedAt, debate.completedAt),
     totalMessages: debate.messages.length,
-    personas: Array.from(new Set(debate.messages.map(m => m.personaName))),
+    personas: Array.from(new Set(debate.messages.map((m: any) => m.personaName))) as string[],
     insights: Math.floor(debate.messages.length / 3), // Rough estimate
     deliverables: [] // Could be calculated based on debate structure
   }))

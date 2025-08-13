@@ -3,7 +3,14 @@
 import { Handle, Position } from '@xyflow/react';
 import { NodeProps } from '@xyflow/react';
 
-export default function PersonaNode({ data }: NodeProps) {
+interface PersonaNodeData {
+  label: string;
+  personaId?: string;
+  role?: string;
+  expertise?: string;
+}
+
+export default function PersonaNode({ data }: NodeProps & { data: PersonaNodeData }) {
   return (
     <div className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-blue-200">
       <Handle type="target" position={Position.Top} className="w-3 h-3" />

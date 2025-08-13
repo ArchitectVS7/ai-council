@@ -3,7 +3,12 @@
 import { Handle, Position } from '@xyflow/react';
 import { NodeProps } from '@xyflow/react';
 
-export default function DecisionNode({ data }: NodeProps) {
+interface DecisionNodeData {
+  label: string;
+  role?: string;
+}
+
+export default function DecisionNode({ data }: NodeProps & { data: DecisionNodeData }) {
   return (
     <div className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-yellow-200">
       <Handle type="target" position={Position.Top} className="w-3 h-3" />

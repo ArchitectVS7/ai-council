@@ -55,7 +55,7 @@ function DraggablePersona({ persona }: DraggablePersonaProps) {
 
   return (
     <div
-      ref={drag}
+      ref={drag as any}
       className={`p-3 bg-white border border-gray-200 rounded-md cursor-move hover:shadow-md transition-shadow ${
         isDragging ? 'opacity-50' : ''
       }`}

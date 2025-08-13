@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useHelp, TooltipContent } from './HelpProvider'
 
 type TooltipHelperProps = {
@@ -140,7 +140,7 @@ export default function TooltipHelper({
     setActiveTooltip(null)
   }
 
-  const updatePosition = () => {
+  const updatePosition = useCallback(() => {
     if (!triggerRef.current || !tooltipRef.current) return
 
     const triggerRect = triggerRef.current.getBoundingClientRect()
@@ -181,13 +181,13 @@ export default function TooltipHelper({
     }
 
     setPosition({ top, left })
-  }
+  }, [tooltipContent.placement, placement])
 
   useEffect(() => {
     if (isVisible && tooltipRef.current) {
       updatePosition()
     }
-  }, [isVisible])
+  }, [isVisible, updatePosition])
 
   useEffect(() => {
     const handleResize = () => {
@@ -205,7 +205,7 @@ export default function TooltipHelper({
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('scroll', handleScroll)
     }
-  }, [isVisible])
+  }, [isVisible, updatePosition])
 
   useEffect(() => {
     return () => {

@@ -149,7 +149,9 @@ export async function POST(req: NextRequest) {
       'X-RateLimit-Reset': rateLimitResult.reset.toString(),
     });
 
-    return new Response(result, { headers });
+    // Handle both Buffer and string types
+    const responseBody = result instanceof Buffer ? new Uint8Array(result) : result as string;
+    return new Response(responseBody, { headers });
 
   } catch (error: any) {
     console.error('Deliverable generation error:', error);

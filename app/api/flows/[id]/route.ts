@@ -40,14 +40,15 @@ async function applyRateLimit(req: NextRequest, action: string) {
 // GET /api/flows/[id] - Get specific flow
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const rateLimitResult = await applyRateLimit(req, 'flow-get')
     if (rateLimitResult instanceof Response) return rateLimitResult
 
+    const resolvedParams = await params
     const db = getDb()
-    const flow = await db.select().from(flows).where(eq(flows.id, parseInt(params.id))).limit(1)
+    const flow = await db.select().from(flows).where(eq(flows.id, parseInt(resolvedParams.id))).limit(1)
     
     if (flow.length === 0) {
       return Response.json({ error: 'Flow not found' }, { status: 404 })
@@ -68,12 +69,13 @@ export async function GET(
 // PUT /api/flows/[id] - Update specific flow
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const rateLimitResult = await applyRateLimit(req, 'flow-update')
     if (rateLimitResult instanceof Response) return rateLimitResult
 
+    const resolvedParams = await params
     const body = await req.json()
     const validationResult = updateFlowSchema.safeParse(body)
     
@@ -90,7 +92,7 @@ export async function PUT(
         ...validationResult.data,
         updatedAt: new Date(),
       })
-      .where(eq(flows.id, parseInt(params.id)))
+      .where(eq(flows.id, parseInt(resolvedParams.id)))
       .returning()
     
     if (!updatedFlow) {
@@ -112,15 +114,16 @@ export async function PUT(
 // DELETE /api/flows/[id] - Delete specific flow
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const rateLimitResult = await applyRateLimit(req, 'flow-delete')
     if (rateLimitResult instanceof Response) return rateLimitResult
 
+    const resolvedParams = await params
     const db = getDb()
     const [deletedFlow] = await db.delete(flows)
-      .where(eq(flows.id, parseInt(params.id)))
+      .where(eq(flows.id, parseInt(resolvedParams.id)))
       .returning()
     
     if (!deletedFlow) {

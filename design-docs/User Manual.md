@@ -15,21 +15,19 @@
 
 ### What is AI Council?
 
-AI Council is a sophisticated multi-persona collaboration platform that orchestrates expert AI personas to analyze, ideate, and develop concepts from multiple professional perspectives. Think of it as assembling a custom panel of specialists where each participant brings unique expertise and viewpoints - but instead of human experts, you're working with AI personas designed to represent different professional domains and analytical approaches.
+AI Council is a sophisticated multi-persona discussion simulator that orchestrates debates or creative brainstorming sessions between different AI personas to explore topics from multiple perspectives. Think of it as hosting a structured panel discussion where each participant has a unique role, expertise, and viewpoint - but instead of human panelists, you're working with AI personas designed to represent different analytical approaches.
 
-Whether you're developing a "mobile game about space wizards in cosmic combat with alien gods" by collaborating with Lovecraft fiction experts, astrophysicists, and game designers, or exploring complex business strategies through market analysts and technical specialists, AI Council provides a structured framework for comprehensive creative and strategic development.
-
-The application is built on a deterministic state-machine flow, meaning collaborations follow predictable patterns while still generating dynamic, innovative content. Whether you're a creative professional exploring new concepts, a business strategist planning market entry, a researcher conducting multi-disciplinary analysis, or an educator facilitating learning through expert simulation, AI Council provides a versatile platform for structured collaboration.
+The application is built on a deterministic state-machine flow, meaning discussions follow predictable patterns while still generating dynamic, insightful content. Whether you're a researcher exploring complex topics, an educator teaching critical thinking, or a content creator developing well-rounded perspectives, AI Council provides a structured framework for comprehensive analysis.
 
 ### Key Benefits
 
-- **Multi-Expert Collaboration**: Engage diverse specialists simultaneously for comprehensive analysis
-- **Structured Creative Process**: Organized, round-based collaboration with clear progression
-- **Configurable Expert Panels**: Customize AI specialists to match your project needs
-- **Visual Flow Design**: Drag-and-drop interface for creating collaboration structures
-- **Professional Deliverables**: Generate creative briefs, strategic plans, and analysis reports
-- **Persistent Storage**: Save and revisit sessions with full database integration
-- **Template Sharing**: Share successful collaboration patterns with colleagues and teams
+- **Multi-perspective Analysis**: Examine topics through different lenses simultaneously
+- **Structured Discourse**: Organized, round-based discussions with clear progression
+- **Configurable Personas**: Customize AI participants to match your needs
+- **Visual Flow Design**: Drag-and-drop interface for creating discussion structures
+- **Comprehensive Reporting**: Generate detailed reports in multiple formats
+- **Persistent Storage**: Save and revisit debates with full database integration
+- **Import/Export**: Share configurations with colleagues or students
 
 ### System Requirements
 
@@ -41,7 +39,7 @@ The application is built on a deterministic state-machine flow, meaning collabor
 
 ### Quick Start Tutorial (5 Minutes)
 
-Let's create your first AI Council debate:
+Let's create your first AI Council disdussion:
 
 #### Step 1: Enter a Topic
 1. Navigate to the main AI Council interface
@@ -56,7 +54,7 @@ The application comes with three pre-configured personas:
 
 The default flow runs: Empathy → Moderator → Skeptic → Moderator (repeated for 2 rounds)
 
-#### Step 3: Start the Debate
+#### Step 3: Start the Discussion
 1. Click the "Start Debate" button
 2. Watch as each persona contributes their perspective
 3. Click "Continue" after each response to advance to the next step
@@ -68,7 +66,7 @@ The default flow runs: Empathy → Moderator → Skeptic → Moderator (repeated
 3. Use "Copy Report" to save the discussion
 4. The debug log shows the internal workings
 
-**Congratulations!** You've just completed your first AI Council debate. The entire process typically takes 3-5 minutes depending on topic complexity.
+**Congratulations!** You've just completed your first AI Council discussion. The entire process typically takes 3-5 minutes depending on topic complexity.
 
 ---
 

@@ -3,7 +3,12 @@
 import { Handle, Position } from '@xyflow/react';
 import { NodeProps } from '@xyflow/react';
 
-export default function SynthesisNode({ data }: NodeProps) {
+interface SynthesisNodeData {
+  label: string;
+  role?: string;
+}
+
+export default function SynthesisNode({ data }: NodeProps & { data: SynthesisNodeData }) {
   return (
     <div className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-green-200">
       <Handle type="target" position={Position.Top} className="w-3 h-3" />
