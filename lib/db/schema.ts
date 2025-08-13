@@ -122,8 +122,21 @@ export const personas = pgTable('personas', {
   updatedAt: timestamp('updated_at').defaultNow(),
 })
 
-// Flows table to match PRD naming  
+// Enhanced Flows table for Visual Flow Designer
 export const flows = pgTable('flows', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  nodes: jsonb('nodes').$type<any[]>().notNull().default([]),
+  edges: jsonb('edges').$type<any[]>().notNull().default([]),
+  category: text('category').notNull().default('creative'),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+})
+
+// Legacy flows table for backward compatibility
+export const legacyFlows = pgTable('legacy_flows', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(),
   description: text('description'),

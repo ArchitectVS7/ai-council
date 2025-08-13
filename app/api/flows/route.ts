@@ -10,8 +10,9 @@ export const dynamic = 'force-dynamic'
 const createFlowSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().optional(),
-  stateFlow: z.array(z.number()),
-  numRounds: z.number().min(1).max(10).default(2),
+  nodes: z.array(z.any()).default([]),
+  edges: z.array(z.any()).default([]),
+  category: z.enum(['creative', 'business', 'research']).default('creative'),
 })
 
 async function applyRateLimit(req: NextRequest, action: string) {
@@ -41,8 +42,17 @@ export async function GET(req: NextRequest) {
     const rateLimitResult = await applyRateLimit(req, 'flow-list')
     if (rateLimitResult instanceof Response) return rateLimitResult
 
+    const { searchParams } = new URL(req.url)
+    const category = searchParams.get('category')
+
     const db = getDb()
-    const flowList = await db.select().from(flows).where(eq(flows.isActive, true))
+    let flowList
+    
+    if (category) {
+      flowList = await db.select().from(flows).where(eq(flows.category, category))
+    } else {
+      flowList = await db.select().from(flows).where(eq(flows.isActive, true))
+    }
     
     return Response.json({ flows: flowList }, {
       headers: {
@@ -76,8 +86,9 @@ export async function POST(req: NextRequest) {
     const [newFlow] = await db.insert(flows).values({
       name: validationResult.data.name,
       description: validationResult.data.description,
-      stateFlow: validationResult.data.stateFlow,
-      numRounds: validationResult.data.numRounds,
+      nodes: validationResult.data.nodes,
+      edges: validationResult.data.edges,
+      category: validationResult.data.category,
     }).returning()
     
     return Response.json({ flow: newFlow }, { 
