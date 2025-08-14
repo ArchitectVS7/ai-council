@@ -311,8 +311,8 @@ The Flow Editor provides a drag-and-drop interface for designing discussion stru
 - **Error Handling**: How to handle persona failures
 - **Timeout Settings**: Maximum time per persona response
 
-#### Pre-built Flow Templates
-The application includes several proven templates:
+#### Workflow Templates (Blueprints)
+The application includes several proven workflow templates (reusable blueprints) you can instantiate as user workflows:
 
 **Academic Analysis:**
 ```
@@ -595,12 +595,12 @@ PUT    /api/personas/{id}      - Update existing persona
 DELETE /api/personas/{id}      - Delete persona
 ```
 
-#### Flow Management
+#### Workflows
 ```
-GET    /api/flows              - List all flows
-POST   /api/flows              - Create new flow
-PUT    /api/flows/{id}         - Update existing flow
-DELETE /api/flows/{id}         - Delete flow
+GET    /api/workflows              - List all workflows
+POST   /api/workflows              - Create new workflow
+PUT    /api/workflows/{id}         - Update existing workflow
+DELETE /api/workflows/{id}         - Delete workflow
 ```
 
 #### Debate Management

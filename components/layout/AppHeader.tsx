@@ -15,7 +15,7 @@ export default function AppHeader({ showNavigation = true, currentPage }: AppHea
   const navigationItems = [
     { name: 'Dashboard', href: '/dashboard', icon: '🏠' },
     { name: 'New Discussion', href: '/discussion', icon: '💬' },
-    { name: 'Flow Management', href: '/flows', icon: '🔄' },
+    { name: 'Workflows', href: '/flows', icon: '🔄' },
     { name: 'Persona Library', href: '/personas', icon: '👥' },
     { name: 'Session History', href: '/sessions', icon: '📚' },
     { name: 'Import/Export', href: '/import-export', icon: '📁' },

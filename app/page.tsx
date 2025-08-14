@@ -203,9 +203,9 @@ export default function LandingPage() {
               <div>
                 <h3 className="font-semibold mb-4">Product</h3>
                 <ul className="space-y-2 text-gray-400">
-                  <li><Link href="/templates" className="hover:text-white transition-colors">Templates</Link></li>
+                  <li><Link href="/templates" className="hover:text-white transition-colors">Workflow Templates</Link></li>
                   <li><Link href="/personas" className="hover:text-white transition-colors">Personas</Link></li>
-                  <li><Link href="/flows" className="hover:text-white transition-colors">Flows</Link></li>
+                  <li><Link href="/flows" className="hover:text-white transition-colors">Workflows</Link></li>
                 </ul>
               </div>
               

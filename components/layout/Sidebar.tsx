@@ -25,7 +25,7 @@ export default function Sidebar({ isOpen = true, onClose }: SidebarProps) {
       description: 'Start a new collaborative session'
     },
     {
-      name: 'Flow Management',
+      name: 'Workflows',
       href: '/flows',
       icon: '🔄',
       description: 'Create and edit discussion flows'
@@ -43,7 +43,7 @@ export default function Sidebar({ isOpen = true, onClose }: SidebarProps) {
       description: 'View past discussions and results'
     },
     {
-      name: 'Templates',
+      name: 'Workflow Templates',
       href: '/templates',
       icon: '📋',
       description: 'Workflow templates and presets'

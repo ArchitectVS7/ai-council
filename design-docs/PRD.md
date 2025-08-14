@@ -31,8 +31,8 @@ The application targets rapid exploration of creative concepts, strategic planni
   - Enable in-UI editing of Persona prompts (name/role/task) and flow sequence
     - Optional full "human in the loop" mode where users can edit persona responses before continuing
     - Optional learning system that can learn from user edits and improve persona responses over time
-  - Offer import/export of configurations (JSON) for sharing workflows and templates
-  - Provide pre-built workflow templates for common use cases:
+  - Offer import/export of configurations (JSON) for sharing workflows and workflow templates
+  - Provide pre-built workflow templates (blueprints) for common use cases that can be instantiated as user workflows:
     - Creative project ideation and development
     - Product strategy and business planning
     - Research collaboration and peer review
@@ -96,14 +96,14 @@ The application targets rapid exploration of creative concepts, strategic planni
 - UX & Interactions
   - **Project/Topic Input**: Support for creative briefs, strategic questions, research topics, and analytical challenges
   - **Expert Panel Configuration**: Visual persona management with role-based templates and custom expert creation
-  - **Collaboration Flow Design**: Drag-and-drop flow editor with pre-built templates for different use cases
+  - **Collaboration Flow Design**: Drag-and-drop flow editor with pre-built workflow templates for different use cases
   - **Session Management**: Start/continue controls adapted for collaborative rather than adversarial interactions
   - **Multi-Format Outputs**: Generate creative briefs, strategic plans, research summaries, and implementation roadmaps
-  - **Template Library**: Pre-built workflows for common scenarios (creative development, business strategy, research collaboration)
+  - **Workflow Template Library**: Reusable blueprints for common scenarios (creative development, business strategy, research collaboration)
 
 - Integration Architecture
   - Server-side LLM integration through secure API proxy (`/api/complete`)
-  - Database persistence for collaborative sessions, expert configurations, and reusable templates
+  - Database persistence for collaborative sessions, expert configurations, user workflows, and reusable workflow templates
   - Import/export system for sharing successful collaboration patterns
 
 ---
@@ -112,7 +112,7 @@ The application targets rapid exploration of creative concepts, strategic planni
 1. **Project Initiation & Expert Assembly**
    - Users enter creative briefs, strategic challenges, or research topics
    - System initializes collaboration with appropriate expert panel
-   - Support for both template-based and custom expert selection
+   - Support for both workflow template-based and custom expert selection
 
 2. **Structured Collaboration Execution**
    - Expert personas contribute specialized insights in configured sequence
@@ -122,7 +122,7 @@ The application targets rapid exploration of creative concepts, strategic planni
 3. **Adaptive Flow Control**
    - Continue controls allow organic development of ideas
    - Users can extend collaboration for deeper exploration
-   - Support for both structured (template) and exploratory (custom) sessions
+   - Support for both structured (workflow template-derived) and exploratory (custom) sessions
 
 4. **Comprehensive Analysis & Deliverables**
    - System compiles expert insights into actionable deliverables
@@ -139,8 +139,8 @@ The application targets rapid exploration of creative concepts, strategic planni
    - Pre-validated flows for common professional scenarios
    - Custom flow creation with guidance and best practices
 
-7. **Template System & Sharing**
-   - Professional workflow templates for different industries and use cases
+7. **Workflow Templates & Sharing**
+   - Professional workflow templates (blueprints) for different industries and use cases
    - Community sharing of successful collaboration patterns
    - Import/export with metadata for context and usage guidelines
 
@@ -175,8 +175,9 @@ The application targets rapid exploration of creative concepts, strategic planni
 
 **Enhanced Database Schema (Neon Postgres):**
 - **expert_personas** (id PK, name, role, task, expertise_domain, industry_context, created_at, updated_at)
-- **collaboration_templates** (id PK, name, description, use_case, industry, persona_flow JSONB, expected_deliverables, created_at, updated_at)
-- **collaboration_sessions** (id PK, title, session_type, template_id FK, started_at, completed_at, deliverables JSONB, created_at)
+- **workflow_templates** (id PK, name, description, category, nodes JSONB, edges JSONB, created_at, updated_at)
+- **workflows** (id PK, name, description, template_id FK nullable, nodes JSONB, edges JSONB, created_at, updated_at)
+- **collaboration_sessions** (id PK, title, session_type, workflow_id FK, started_at, completed_at, deliverables JSONB, created_at)
 - **session_contributions** (id PK, session_id FK, persona_name, expertise_domain, round, content TEXT, insight_type, timestamp)
 - **session_deliverables** (id PK, session_id FK, deliverable_type, content TEXT, format, created_at)
 
@@ -198,9 +199,9 @@ The application targets rapid exploration of creative concepts, strategic planni
   - Custom expert creation with role validation
   - Expertise mapping and collaboration optimization
   
-- **Template Management**
-  - Professional workflow templates by industry and use case
-  - Template customization and sharing
+- **Workflow Template Management**
+  - Professional workflow templates by industry and use case (as blueprints)
+  - Template customization and sharing; instantiate as user workflows
   - Success metrics and outcome tracking
   
 - **Deliverable Generation**
@@ -252,7 +253,7 @@ The application targets rapid exploration of creative concepts, strategic planni
 - **Enhanced API Routes**: 
   - `/api/collaboration` for session management
   - `/api/expert-personas` for professional persona management
-  - `/api/templates` for workflow template management
+  - `/api/workflow-templates` for workflow template management
   - `/api/deliverables` for output generation and formatting
 
 **Professional Integration Features**:

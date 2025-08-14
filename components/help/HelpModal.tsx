@@ -62,19 +62,21 @@ export default function HelpModal({ isOpen, onClose }: HelpModalProps) {
     }
   }, [searchQuery, searchHelpContent, setCurrentHelpSection])
 
-  // Load content when section changes
+  // Load content when section changes and auto-select the first article
   useEffect(() => {
     if (currentHelpSection) {
       setSearchQuery('')
-      setSelectedContent(null)
+      const first = getHelpContent(currentHelpSection)[0] || null
+      setSelectedContent(first)
     }
-  }, [currentHelpSection, setSearchQuery])
+  }, [currentHelpSection, setSearchQuery, getHelpContent])
 
   if (!isOpen) return null
 
   const handleSectionClick = (section: HelpSection) => {
     setCurrentHelpSection(section)
-    setSelectedContent(null)
+    const first = getHelpContent(section)[0] || null
+    setSelectedContent(first)
     trackHelpInteraction('section_clicked', section)
   }
 

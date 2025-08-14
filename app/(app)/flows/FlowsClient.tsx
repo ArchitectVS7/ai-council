@@ -62,7 +62,7 @@ export default function FlowsClient({ flows }: FlowsClientProps) {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Flow Management</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Workflows</h1>
             <p className="mt-2 text-gray-600">
               Create and manage multi-agent collaboration workflows. Design the sequence 
               and interaction patterns for your AI discussions.
