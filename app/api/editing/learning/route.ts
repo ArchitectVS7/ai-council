@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getDb } from '../../../../lib/db/connection';
 import { PersonaLearningSystem } from '../../../../lib/learning/persona-learning';
+import type { ResponseFeedback } from '../../../../types/editing';
 import { rateLimit, defaultRateLimits, getClientIdentifier } from '../../../../lib/ratelimit';
 import { z } from 'zod';
 
@@ -17,7 +18,7 @@ const learningQuerySchema = z.object({
 
 async function applyRateLimit(req: NextRequest, action: string) {
   const clientId = getClientIdentifier(req);
-  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.analytics, action);
+  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.workflow, action);
   
   if (!rateLimitResult.success) {
     return Response.json(
@@ -98,13 +99,13 @@ export async function GET(req: NextRequest) {
       }
     ];
 
-    const mockFeedback = [
+    const mockFeedback: ResponseFeedback[] = [
       {
         id: 'feedback-1',
         responseId: '1',
         userId: 'user-1',
         rating: 4,
-        category: 'accuracy' as const,
+        category: 'accuracy',
         comment: 'Good accuracy but could be more specific',
         createdAt: new Date('2025-01-10T11:00:00Z'),
       },
@@ -113,7 +114,7 @@ export async function GET(req: NextRequest) {
         responseId: '2',
         userId: 'user-2',
         rating: 3,
-        category: 'tone' as const,
+        category: 'tone',
         comment: 'Tone needs adjustment',
         createdAt: new Date('2025-01-11T15:00:00Z'),
       },
@@ -122,7 +123,7 @@ export async function GET(req: NextRequest) {
         responseId: '3',
         userId: 'user-1',
         rating: 5,
-        category: 'clarity' as const,
+        category: 'clarity',
         comment: 'Excellent clarity and structure',
         createdAt: new Date('2025-01-12T10:00:00Z'),
       }
@@ -205,7 +206,7 @@ export async function GET(req: NextRequest) {
         editRate: filteredResponses.length > 0 
           ? filteredEditHistory.length / filteredResponses.length
           : 0,
-        topImprovementAreas: this.getTopImprovementAreas(allPersonaLearning),
+        topImprovementAreas: getTopImprovementAreas(allPersonaLearning),
       };
 
       return Response.json({
@@ -227,37 +228,39 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Helper method to aggregate improvement areas across personas
-  static getTopImprovementAreas(personaLearning: any[]): any[] {
-    const areaAggregation: Record<string, { category: string; totalFrequency: number; count: number; examples: string[] }> = {};
+  // Close GET handler
+}
 
-    personaLearning.forEach(persona => {
-      persona.improvementAreas.forEach((area: any) => {
-        if (!areaAggregation[area.category]) {
-          areaAggregation[area.category] = {
-            category: area.category,
-            totalFrequency: 0,
-            count: 0,
-            examples: [],
-          };
-        }
-        
-        areaAggregation[area.category].totalFrequency += area.frequency;
-        areaAggregation[area.category].count += 1;
-        areaAggregation[area.category].examples.push(...area.examples.slice(0, 2));
-      });
+// Helper method to aggregate improvement areas across personas
+function getTopImprovementAreas(personaLearning: any[]): any[] {
+  const areaAggregation: Record<string, { category: string; totalFrequency: number; count: number; examples: string[] }> = {};
+
+  personaLearning.forEach(persona => {
+    persona.improvementAreas.forEach((area: any) => {
+      if (!areaAggregation[area.category]) {
+        areaAggregation[area.category] = {
+          category: area.category,
+          totalFrequency: 0,
+          count: 0,
+          examples: [],
+        };
+      }
+      
+      areaAggregation[area.category].totalFrequency += area.frequency;
+      areaAggregation[area.category].count += 1;
+      areaAggregation[area.category].examples.push(...area.examples.slice(0, 2));
     });
+  });
 
-    return Object.values(areaAggregation)
-      .map(area => ({
-        category: area.category,
-        averageFrequency: area.totalFrequency / area.count,
-        affectedPersonas: area.count,
-        examples: [...new Set(area.examples)].slice(0, 3),
-      }))
-      .sort((a, b) => b.averageFrequency - a.averageFrequency)
-      .slice(0, 5);
-  }
+  return Object.values(areaAggregation)
+    .map(area => ({
+      category: area.category,
+      averageFrequency: area.totalFrequency / area.count,
+      affectedPersonas: area.count,
+      examples: Array.from(new Set(area.examples)).slice(0, 3),
+    }))
+    .sort((a, b) => b.averageFrequency - a.averageFrequency)
+    .slice(0, 5);
 }
 
 // POST /api/editing/learning - Trigger learning system update

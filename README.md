@@ -30,3 +30,24 @@ pnpm dev
 ```
 
 Open `/` for AI Council scaffold. Open `/starter` for the original Postgres demo list.
+
+## Database (Drizzle ORM)
+
+This project uses Drizzle ORM and Drizzle Kit for schema and migrations.
+
+Environment variables:
+- Set `DATABASE_URL` or `POSTGRES_URL` in `.env.local`.
+
+Commands:
+```bash
+# Generate migrations from current schema (may prompt on first run)
+npm run db:generate
+
+# Apply migrations
+npm run db:migrate
+
+# Visualize schema
+npm run db:studio
+```
+
+If `db:generate` shows a prompt about `flows.nodes`, select “create column” unless you are renaming from a legacy schema. This matches the new visual flow designer tables in `lib/db/schema.ts`.

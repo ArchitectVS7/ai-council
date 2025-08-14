@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 async function applyRateLimit(req: NextRequest, action: string) {
   const clientId = getClientIdentifier(req);
-  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.auth, action);
+  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.workflow, action);
   
   if (!rateLimitResult.success) {
     return Response.json(

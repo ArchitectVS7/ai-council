@@ -22,7 +22,7 @@ const exportSchema = z.object({
 
 async function applyRateLimit(req: NextRequest, action: string) {
   const clientId = getClientIdentifier(req);
-  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.export, action);
+  const rateLimitResult = await rateLimit(clientId, defaultRateLimits.workflow, action);
   
   if (!rateLimitResult.success) {
     return Response.json(

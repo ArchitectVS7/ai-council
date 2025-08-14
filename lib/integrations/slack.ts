@@ -17,39 +17,58 @@ export class SlackIntegration {
     options: SlackExportOptions
   ): Promise<ExportResult> {
     try {
-      let response;
+      let response: any;
+      let messageTs: string | undefined;
+      let fileId: string | undefined;
+      let filePermalink: string | undefined;
       
       if (options.asSnippet) {
         // Post as a code snippet
-        response = await this.client.files.upload({
+        const upload = await this.client.files.upload({
           channels: options.channelId,
           content: content,
           filetype: 'text',
           title: 'AI Council Deliverable',
-          thread_ts: options.threadTs,
-        });
+          ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+        } as any);
+        response = upload;
+        fileId = upload.file?.id as string | undefined;
+        filePermalink = upload.file?.permalink as string | undefined;
       } else {
         // Post as a regular message
         const text = options.mentions 
           ? `${options.mentions.map(mention => `<@${mention}>`).join(' ')} ${content}`
           : content;
 
-        response = await this.client.chat.postMessage({
+        const msg = await this.client.chat.postMessage({
           channel: options.channelId,
           text: text,
-          thread_ts: options.threadTs,
+          ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
           blocks: this.formatContentAsBlocks(content),
-        });
+        } as any);
+        response = msg;
+        messageTs = msg.ts as string | undefined;
       }
 
       if (!response.ok) {
         throw new Error(response.error || 'Failed to post to Slack');
       }
 
+      if (messageTs) {
+        return {
+          success: true,
+          id: messageTs,
+          url: this.generateMessageUrl(options.channelId, messageTs),
+          metadata: {
+            exportedAt: new Date(),
+            format: 'slack-post',
+          },
+        };
+      }
       return {
         success: true,
-        id: response.ts as string,
-        url: this.generateMessageUrl(options.channelId, response.ts as string),
+        id: fileId || '',
+        url: filePermalink || '',
         metadata: {
           exportedAt: new Date(),
           format: 'slack-post',
@@ -74,7 +93,7 @@ export class SlackIntegration {
     attachments?: any[]
   ): Promise<ExportResult> {
     try {
-      const response = await this.client.chat.postMessage({
+      const response: any = await this.client.chat.postMessage({
         channel: userId,
         text: content,
         attachments: attachments,
@@ -195,7 +214,7 @@ export class SlackIntegration {
   // Get channel list
   async getChannels(): Promise<any[]> {
     try {
-      const response = await this.client.conversations.list({
+      const response: any = await this.client.conversations.list({
         exclude_archived: true,
         types: 'public_channel,private_channel'
       });
@@ -213,7 +232,7 @@ export class SlackIntegration {
   // Get user list
   async getUsers(): Promise<any[]> {
     try {
-      const response = await this.client.users.list();
+      const response: any = await this.client.users.list({});
 
       if (!response.ok) {
         throw new Error(response.error || 'Failed to get users');

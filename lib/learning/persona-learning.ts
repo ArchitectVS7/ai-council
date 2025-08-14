@@ -12,7 +12,7 @@ export class PersonaLearningSystem {
   ): PersonaLearning {
     const personaResponses = responses.filter(r => r.personaId === personaId);
     const personaEdits = editHistory.filter(h => 
-      personaResponses.some(r => r.id === h.responseId)
+      personaResponses.some(r => r.id === h.id || r.id === (h as any).responseId)
     );
     const personaFeedback = feedback.filter(f => 
       personaResponses.some(r => r.id === f.responseId)
