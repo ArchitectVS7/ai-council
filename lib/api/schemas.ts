@@ -8,7 +8,12 @@
  */
 import { z } from 'zod'
 
-import { MAX_ROUNDS, MIN_ROUNDS } from '@/lib/council/snapshot'
+import {
+  MAX_COUNCIL_MEMBERS,
+  MAX_ROUNDS,
+  MIN_COUNCIL_MEMBERS,
+  MIN_ROUNDS,
+} from '@/lib/council/snapshot'
 
 /**
  * `POST /api/sessions`. Strict: an unknown key is a caller mistake and is
@@ -50,6 +55,44 @@ export const personaInputSchema = z.strictObject({
     .refine((value) => !/[\r\n]/.test(value), 'Role must be a single line.'),
   charter: z.string().trim().min(1, 'Charter is required.').max(5_000),
   color: z.string().regex(/^#[0-9a-f]{6}$/i, 'Color must be a hex value like #2563eb.'),
+})
+
+/** `PUT`/`DELETE /api/councils/[id]` — a bad id is a 400 rather than a Postgres cast error. */
+export const councilIdSchema = z.uuid('Council id must be a UUID.')
+
+/** One seat of the submitted speaking order. The position is advisory — the server renumbers it. */
+const councilMemberSchema = z.strictObject({
+  personaId: z.uuid('Each member must reference a persona by UUID.'),
+  position: z.number().int().min(0),
+})
+
+/**
+ * `POST /api/councils` (create) and `PUT /api/councils/[id]` (replace).
+ *
+ * One schema for both verbs, for the same reason as `personaInputSchema`: the
+ * editor on `/councils` is a whole-record form that always sends every field.
+ *
+ * The bounds are PRD §5.3's, imported from `lib/council/snapshot.ts` rather than
+ * restated, so the builder and the snapshot builder can never disagree about
+ * what a legal council is. `description` is a required key with a nullable value
+ * — the form sends `null` when the box is blank, so "cleared" is expressible.
+ *
+ * `archived` is deliberately not accepted: archiving is a server decision made
+ * by `DELETE` when the council is still referenced, never something the client
+ * asks for (PRD §8).
+ */
+export const councilInputSchema = z.strictObject({
+  name: z.string().trim().min(1, 'Name is required.').max(80),
+  description: z.string().trim().max(1_000).nullable(),
+  defaultRounds: z.number().int().min(MIN_ROUNDS).max(MAX_ROUNDS),
+  members: z
+    .array(councilMemberSchema)
+    .min(MIN_COUNCIL_MEMBERS, `A council needs at least ${MIN_COUNCIL_MEMBERS} personas.`)
+    .max(MAX_COUNCIL_MEMBERS, `A council may seat at most ${MAX_COUNCIL_MEMBERS} personas.`)
+    .refine(
+      (members) => new Set(members.map((member) => member.personaId)).size === members.length,
+      'A persona may hold only one place in the speaking order.',
+    ),
 })
 
 /**

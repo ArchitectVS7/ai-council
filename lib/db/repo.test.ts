@@ -58,6 +58,7 @@ const REPO_SOURCE = readFileSync(REPO_FILE, 'utf8')
 describe('route handlers reach the database only through lib/db/repo.ts', () => {
   it('scans every route file under app/api', () => {
     expect(ROUTE_FILES.map(posixRelative)).toEqual([
+      'councils/[id]/route.ts',
       'councils/route.ts',
       'personas/[id]/route.ts',
       'personas/route.ts',
@@ -94,10 +95,13 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     // `@/lib/session/view`, which assembles its payload (T-013).
     // `@/lib/personas/types` is the client-safe wire shape plus its pure
     // projection (T-022) — no database and no HTTP knowledge.
+    // `@/lib/councils/members` is the pure speaking-order arithmetic behind the
+    // builder (T-023) — likewise no database and no HTTP knowledge.
     const allowed = new Set([
       '@/lib/api/http',
       '@/lib/api/schemas',
       '@/lib/council/snapshot',
+      '@/lib/councils/members',
       '@/lib/db/repo',
       '@/lib/personas/types',
       '@/lib/session/turns',
@@ -143,13 +147,22 @@ describe('lib/db/repo.ts', () => {
   it('only the council-library reads name the councils table; session reads never do', () => {
     expect(functionBody(REPO_SOURCE, 'findCouncilWithMembers')).toMatch(/\bcouncils\b/)
     expect(functionBody(REPO_SOURCE, 'listCouncils')).toMatch(/\bcouncils\b/)
-    // Every exported function in the module, so the guard cannot be outgrown.
+    // Every exported function in the module, in declaration order, so the guard
+    // cannot be outgrown.
     const namers = [
       'listSessions',
       'findSessionWithTurns',
-      'insertSession',
       'findCouncilWithMembers',
       'listCouncils',
+      'listCouncilsWithMembers',
+      'findCouncilDetail',
+      'findCouncil',
+      'insertCouncil',
+      'updateCouncil',
+      'archiveCouncil',
+      'deleteCouncil',
+      'replaceCouncilMembers',
+      'insertSession',
       'insertTurn',
       'updateTurnInPlace',
       'bumpTurnCursor',
@@ -158,15 +171,31 @@ describe('lib/db/repo.ts', () => {
       'markSessionCompleted',
       'listPersonas',
       'findPersona',
+      'findPersonasByIds',
       'insertPersona',
       'updatePersona',
       'archivePersona',
       'deletePersona',
       'countPersonaReferences',
+      'countCouncilReferences',
     ].filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
-    // `findCouncilWithMembers` feeds snapshot *creation*; `listCouncils` feeds
-    // the picker for a session that does not exist yet. Neither reads a session.
-    expect(namers).toEqual(['findCouncilWithMembers', 'listCouncils'])
+    // `findCouncilWithMembers` feeds snapshot *creation*; the rest are the
+    // council-library reads and writes behind `/councils`. None reads a session.
+    //
+    // `countCouncilReferences` is deliberately absent: it counts
+    // `sessions.council_id` as provenance to decide archive-versus-delete, and
+    // touches no council row and no snapshot at all (T-023).
+    expect(namers).toEqual([
+      'findCouncilWithMembers',
+      'listCouncils',
+      'listCouncilsWithMembers',
+      'findCouncilDetail',
+      'findCouncil',
+      'insertCouncil',
+      'updateCouncil',
+      'archiveCouncil',
+      'deleteCouncil',
+    ])
     for (const name of namers) {
       expect(functionBody(REPO_SOURCE, name)).not.toMatch(/\bsessions\b/)
     }
@@ -177,22 +206,32 @@ describe('lib/db/repo.ts', () => {
   it('covers every exported function of the module', () => {
     const exported = [...REPO_SOURCE.matchAll(/^export async function (\w+)/gm)].map((m) => m[1])
     expect(exported.sort()).toEqual([
+      'archiveCouncil',
       'archivePersona',
       'bumpTurnCursor',
+      'countCouncilReferences',
       'countPersonaReferences',
+      'deleteCouncil',
       'deletePersona',
+      'findCouncil',
+      'findCouncilDetail',
       'findCouncilWithMembers',
       'findPersona',
+      'findPersonasByIds',
       'findSessionWithTurns',
+      'insertCouncil',
       'insertPersona',
       'insertSession',
       'insertTurn',
       'listCouncils',
+      'listCouncilsWithMembers',
       'listPersonas',
       'listSessions',
       'markSessionCompleted',
       'reopenSession',
+      'replaceCouncilMembers',
       'touchSession',
+      'updateCouncil',
       'updatePersona',
       'updateTurnInPlace',
     ])

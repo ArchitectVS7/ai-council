@@ -23,9 +23,14 @@ export default async function PersonasPage() {
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 p-6">
       <div className="flex items-baseline justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">Personas</h1>
-        <Link href="/" className="text-sm text-slate-600 underline underline-offset-2">
-          Sessions
-        </Link>
+        <nav className="flex gap-4 text-sm text-slate-600">
+          <Link href="/" className="underline underline-offset-2">
+            Sessions
+          </Link>
+          <Link href="/councils" className="underline underline-offset-2">
+            Councils
+          </Link>
+        </nav>
       </div>
 
       <PersonaLibrary initialPersonas={personas} />

@@ -11,14 +11,17 @@ import 'server-only'
  * Snapshot rule (PRD §7): the session read paths below never join `councils`.
  * A session's council name comes from `council_snapshot.name`, so renaming,
  * reordering, or archiving a council cannot alter a session that already ran.
- * `councils` is named in exactly two places, neither of which renders a session:
- * `findCouncilWithMembers`, which feeds snapshot *creation*, and `listCouncils`,
- * which reads the council library for the picker on `/`.
+ * The functions that name `councils` are the library reads and writes behind
+ * `/councils` plus `findCouncilWithMembers`, which feeds snapshot *creation*.
+ * None of them reads a session row, and `lib/db/repo.test.ts` checks that
+ * statically over every exported function in this file.
  */
-import { asc, count, desc, eq, sql } from 'drizzle-orm'
+import { asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import type { CouncilSnapshot } from '@/lib/council/types'
 import type { SnapshotSource } from '@/lib/council/snapshot'
+import type { CouncilMemberInput } from '@/lib/councils/members'
+import type { CouncilDetail } from '@/lib/councils/types'
 import { getDb } from '@/lib/db'
 import { councilMembers, councils, personas, sessions, turns } from '@/lib/db/schema'
 import type { PersonaSummary } from '@/lib/personas/types'
@@ -132,6 +135,189 @@ export async function listCouncils(): Promise<CouncilListItem[]> {
     .from(councils)
     .where(eq(councils.archived, false))
     .orderBy(asc(councils.name))
+}
+
+/**
+ * The council library with each council's speaking order, for the builder on
+ * `/councils`. Archived councils are omitted for the same reason as above.
+ *
+ * Two queries rather than one grouped read: nothing here is on a render path,
+ * and a flat member list is cheaper to reason about than a grouped join. The
+ * member rows carry the persona's name and color so a seat can be labelled even
+ * when the persona behind it has since been archived.
+ */
+export async function listCouncilsWithMembers(): Promise<CouncilDetail[]> {
+  const db = getDb()
+
+  const rows = await db
+    .select({
+      id: councils.id,
+      name: councils.name,
+      description: councils.description,
+      defaultRounds: councils.defaultRounds,
+    })
+    .from(councils)
+    .where(eq(councils.archived, false))
+    .orderBy(asc(councils.name))
+
+  if (rows.length === 0) return []
+
+  const seats = await db
+    .select({
+      councilId: councilMembers.councilId,
+      personaId: councilMembers.personaId,
+      position: councilMembers.position,
+      name: personas.name,
+      color: personas.color,
+    })
+    .from(councilMembers)
+    .innerJoin(personas, eq(councilMembers.personaId, personas.id))
+    .where(
+      inArray(
+        councilMembers.councilId,
+        rows.map((row) => row.id),
+      ),
+    )
+    .orderBy(asc(councilMembers.position))
+
+  return rows.map((row) => ({
+    ...row,
+    members: seats
+      .filter((seat) => seat.councilId === row.id)
+      .map((seat) => ({
+        personaId: seat.personaId,
+        position: seat.position,
+        name: seat.name,
+        color: seat.color,
+      })),
+  }))
+}
+
+/**
+ * One council and its speaking order, archived or not, or null when the id is
+ * unknown. Every write answers with this so the builder re-renders from what was
+ * stored rather than from what was typed.
+ */
+export async function findCouncilDetail(councilId: string): Promise<CouncilDetail | null> {
+  const db = getDb()
+
+  const [council] = await db
+    .select({
+      id: councils.id,
+      name: councils.name,
+      description: councils.description,
+      defaultRounds: councils.defaultRounds,
+    })
+    .from(councils)
+    .where(eq(councils.id, councilId))
+    .limit(1)
+  if (!council) return null
+
+  const members = await db
+    .select({
+      personaId: councilMembers.personaId,
+      position: councilMembers.position,
+      name: personas.name,
+      color: personas.color,
+    })
+    .from(councilMembers)
+    .innerJoin(personas, eq(councilMembers.personaId, personas.id))
+    .where(eq(councilMembers.councilId, councilId))
+    .orderBy(asc(councilMembers.position))
+
+  return { ...council, members }
+}
+
+/** Just enough of a council row for `DELETE` to decide archive-versus-delete. */
+export async function findCouncil(
+  councilId: string,
+): Promise<{ id: string; name: string; archived: boolean } | null> {
+  const [council] = await getDb()
+    .select({ id: councils.id, name: councils.name, archived: councils.archived })
+    .from(councils)
+    .where(eq(councils.id, councilId))
+    .limit(1)
+
+  return council ?? null
+}
+
+/** The three editable council fields of PRD §6 screen 3; create and replace both send all of them. */
+type CouncilInput = {
+  name: string
+  description: string | null
+  defaultRounds: number
+}
+
+/** Create a council. `archived` and the timestamps come from the column defaults. */
+export async function insertCouncil(input: CouncilInput): Promise<{ id: string }> {
+  const [council] = await getDb().insert(councils).values(input).returning({ id: councils.id })
+
+  if (!council) {
+    throw new Error('Council insert returned no row.')
+  }
+  return council
+}
+
+/**
+ * Replace a council's three editable fields. Null when the id matched no row, so
+ * the caller can answer 404 rather than pretending the write happened.
+ */
+export async function updateCouncil(
+  councilId: string,
+  patch: CouncilInput,
+): Promise<{ id: string } | null> {
+  const [council] = await getDb()
+    .update(councils)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(eq(councils.id, councilId))
+    .returning({ id: councils.id })
+
+  return council ?? null
+}
+
+/** Retire a council from the library without removing the row. */
+export async function archiveCouncil(councilId: string): Promise<{ id: string } | null> {
+  const [council] = await getDb()
+    .update(councils)
+    .set({ archived: true, updatedAt: new Date() })
+    .where(eq(councils.id, councilId))
+    .returning({ id: councils.id })
+
+  return council ?? null
+}
+
+/** Remove a council outright. Only safe once `countCouncilReferences` returns 0. */
+export async function deleteCouncil(councilId: string): Promise<void> {
+  await getDb().delete(councils).where(eq(councils.id, councilId))
+}
+
+/**
+ * Replace a council's whole speaking order.
+ *
+ * The composite primary key is `(council_id, position)`, so a partial update
+ * cannot express a reorder — the same reason `scripts/seed.ts` writes membership
+ * this way. `members` must already be normalized to contiguous `0..n-1`
+ * positions; `normalizeCouncilMembers` is what the routes call to guarantee it.
+ *
+ * Not wrapped in a transaction: this is a single-convener app, the same
+ * rationale PRD §8 gives for the in-memory rate limiter.
+ */
+export async function replaceCouncilMembers(
+  councilId: string,
+  members: CouncilMemberInput[],
+): Promise<void> {
+  const db = getDb()
+
+  await db.delete(councilMembers).where(eq(councilMembers.councilId, councilId))
+  if (members.length === 0) return
+
+  await db.insert(councilMembers).values(
+    members.map((member) => ({
+      councilId,
+      personaId: member.personaId,
+      position: member.position,
+    })),
+  )
 }
 
 /**
@@ -320,6 +506,20 @@ export async function findPersona(personaId: string): Promise<PersonaRow | null>
   return persona ?? null
 }
 
+/**
+ * Which of the given persona ids actually exist — an existence check, nothing
+ * more, so the council write routes can answer a 400 that names the unknown id
+ * instead of letting a foreign-key violation surface as a 500 (R4).
+ *
+ * Archived personas count as existing: a council may already seat one, and
+ * saving an unrelated edit to that council must not silently drop the seat.
+ */
+export async function findPersonasByIds(personaIds: string[]): Promise<{ id: string }[]> {
+  if (personaIds.length === 0) return []
+
+  return getDb().select({ id: personas.id }).from(personas).where(inArray(personas.id, personaIds))
+}
+
 /** Create a persona. `archived` and the timestamps come from the column defaults. */
 export async function insertPersona(input: PersonaInput): Promise<PersonaRow> {
   const [persona] = await getDb().insert(personas).values(input).returning()
@@ -398,4 +598,23 @@ export async function countPersonaReferences(persona: {
     )
 
   return (membership?.value ?? 0) + (history?.value ?? 0)
+}
+
+/**
+ * How many sessions still point at this council. Non-zero means `DELETE` must
+ * archive rather than remove the row.
+ *
+ * This is a provenance count, not a render and not a join: it reads only
+ * `sessions.council_id`, never `council_snapshot`, and no transcript content is
+ * touched. The snapshot rule is exactly why archiving matters here — the FK is
+ * `on delete set null`, so a hard delete would erase which council a past run
+ * came from while leaving every one of its turns intact and unchanged (PRD §7).
+ */
+export async function countCouncilReferences(councilId: string): Promise<number> {
+  const [referenced] = await getDb()
+    .select({ value: count() })
+    .from(sessions)
+    .where(eq(sessions.councilId, councilId))
+
+  return referenced?.value ?? 0
 }

@@ -24,9 +24,14 @@ export default async function SessionsPage() {
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 p-6">
       <div className="flex items-baseline justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">AI Council</h1>
-        <Link href="/personas" className="text-sm text-slate-600 underline underline-offset-2">
-          Personas
-        </Link>
+        <nav className="flex gap-4 text-sm text-slate-600">
+          <Link href="/councils" className="underline underline-offset-2">
+            Councils
+          </Link>
+          <Link href="/personas" className="underline underline-offset-2">
+            Personas
+          </Link>
+        </nav>
       </div>
 
       <section aria-labelledby="new-session" className="flex flex-col gap-3">

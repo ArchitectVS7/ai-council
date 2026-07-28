@@ -16,29 +16,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
+import { describeFailure, messageOf, readErrorBody } from '@/lib/api/failure'
 import type { PersonaSummary } from '@/lib/personas/types'
-
-/** The error envelope every route handler returns (`lib/api/http.ts`). */
-type ErrorBody = { error?: string; issues?: { message?: string }[] }
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/** The server's own words, with zod's issue messages appended when it sent any. */
-function describeFailure(body: ErrorBody | null, status: number): string {
-  const base = body?.error ?? `The server refused the request (HTTP ${status}).`
-  const issues = Array.isArray(body?.issues)
-    ? body.issues
-        .map((issue) => issue?.message)
-        .filter((message): message is string => typeof message === 'string' && message.length > 0)
-    : []
-  return issues.length === 0 ? base : `${base} ${issues.join(' ')}`
-}
-
-async function readErrorBody(response: Response): Promise<ErrorBody | null> {
-  return (await response.json().catch(() => null)) as ErrorBody | null
-}
 
 /** Matches the seed palette, so a new persona starts somewhere sensible. */
 const DEFAULT_COLOR = '#2563eb'
