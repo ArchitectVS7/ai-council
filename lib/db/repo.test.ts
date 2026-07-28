@@ -58,6 +58,7 @@ const REPO_SOURCE = readFileSync(REPO_FILE, 'utf8')
 describe('route handlers reach the database only through lib/db/repo.ts', () => {
   it('scans every route file under app/api', () => {
     expect(ROUTE_FILES.map(posixRelative)).toEqual([
+      'councils/route.ts',
       'sessions/[id]/advance/route.ts',
       'sessions/[id]/retry-last/route.ts',
       'sessions/[id]/route.ts',
@@ -101,8 +102,15 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     }
   })
 
-  it('never names the councils table', () => {
-    for (const file of ROUTE_FILES) {
+  it('no session route names the councils table (PRD §7 snapshot rule)', () => {
+    // Scoped to the session routes on purpose. `councils/route.ts` is the
+    // council-*library* read behind the picker on `/`; it touches no session
+    // row, so naming the table there cannot leak a live council into a
+    // transcript. Every route that renders or mutates a session is checked.
+    const sessionRoutes = ROUTE_FILES.filter((file) => posixRelative(file).startsWith('sessions/'))
+    expect(sessionRoutes.length).toBeGreaterThan(0)
+
+    for (const file of sessionRoutes) {
       expect(readFileSync(file, 'utf8'), posixRelative(file)).not.toMatch(/\bcouncils\b/)
     }
   })
@@ -124,20 +132,29 @@ describe('lib/db/repo.ts', () => {
     },
   )
 
-  it('joins councils in exactly one place: snapshot creation', () => {
+  it('only the council-library reads name the councils table; session reads never do', () => {
     expect(functionBody(REPO_SOURCE, 'findCouncilWithMembers')).toMatch(/\bcouncils\b/)
+    expect(functionBody(REPO_SOURCE, 'listCouncils')).toMatch(/\bcouncils\b/)
     // Every exported function in the module, so the guard cannot be outgrown.
-    const joiners = [
+    const namers = [
       'listSessions',
       'findSessionWithTurns',
       'insertSession',
       'findCouncilWithMembers',
+      'listCouncils',
       'insertTurn',
       'updateTurnInPlace',
       'bumpTurnCursor',
       'markSessionCompleted',
     ].filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
-    expect(joiners).toEqual(['findCouncilWithMembers'])
+    // `findCouncilWithMembers` feeds snapshot *creation*; `listCouncils` feeds
+    // the picker for a session that does not exist yet. Neither reads a session.
+    expect(namers).toEqual(['findCouncilWithMembers', 'listCouncils'])
+    for (const name of namers) {
+      expect(functionBody(REPO_SOURCE, name)).not.toMatch(/\bsessions\b/)
+    }
+    // The council library is a flat read — no join to members or personas.
+    expect(functionBody(REPO_SOURCE, 'listCouncils')).not.toMatch(/\binnerJoin\b|\bleftJoin\b/)
   })
 
   it('covers every exported function of the module', () => {
@@ -148,6 +165,7 @@ describe('lib/db/repo.ts', () => {
       'findSessionWithTurns',
       'insertSession',
       'insertTurn',
+      'listCouncils',
       'listSessions',
       'markSessionCompleted',
       'updateTurnInPlace',

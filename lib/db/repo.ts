@@ -11,8 +11,9 @@ import 'server-only'
  * Snapshot rule (PRD §7): the session read paths below never join `councils`.
  * A session's council name comes from `council_snapshot.name`, so renaming,
  * reordering, or archiving a council cannot alter a session that already ran.
- * `councils` is joined in exactly one place — `findCouncilWithMembers`, which
- * feeds snapshot *creation*, not rendering.
+ * `councils` is named in exactly two places, neither of which renders a session:
+ * `findCouncilWithMembers`, which feeds snapshot *creation*, and `listCouncils`,
+ * which reads the council library for the picker on `/`.
  */
 import { asc, desc, eq, sql } from 'drizzle-orm'
 
@@ -101,6 +102,34 @@ export async function findCouncilWithMembers(councilId: string): Promise<Snapsho
     .orderBy(asc(councilMembers.position))
 
   return { name: council.name, defaultRounds: council.defaultRounds, members }
+}
+
+/** One option in the council picker on `/` (PRD §6). */
+export type CouncilListItem = {
+  id: string
+  name: string
+  description: string | null
+  defaultRounds: number
+}
+
+/**
+ * The council library, for choosing what a *new* session will snapshot.
+ *
+ * Archived councils are omitted: they may not start new sessions, while the
+ * sessions they already started keep rendering from their own snapshots.
+ * This is a library read, not a session render — no session row is touched.
+ */
+export async function listCouncils(): Promise<CouncilListItem[]> {
+  return getDb()
+    .select({
+      id: councils.id,
+      name: councils.name,
+      description: councils.description,
+      defaultRounds: councils.defaultRounds,
+    })
+    .from(councils)
+    .where(eq(councils.archived, false))
+    .orderBy(asc(councils.name))
 }
 
 /**
