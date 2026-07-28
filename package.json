@@ -18,6 +18,7 @@
     "knip": "knip",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "check": "npm run typecheck && npm run lint && npm run test && npm run knip"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "knip": "^6.29.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.2",
     "vitest": "^4.1.10"
   }
