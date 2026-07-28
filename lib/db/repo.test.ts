@@ -59,6 +59,8 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
   it('scans every route file under app/api', () => {
     expect(ROUTE_FILES.map(posixRelative)).toEqual([
       'councils/route.ts',
+      'personas/[id]/route.ts',
+      'personas/route.ts',
       'sessions/[id]/advance/route.ts',
       'sessions/[id]/interject/route.ts',
       'sessions/[id]/regenerate-last/route.ts',
@@ -90,11 +92,14 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     // reaches the provider and the database only through `@/lib/session/turns`,
     // and the GET route learns the provider name only through the server-only
     // `@/lib/session/view`, which assembles its payload (T-013).
+    // `@/lib/personas/types` is the client-safe wire shape plus its pure
+    // projection (T-022) — no database and no HTTP knowledge.
     const allowed = new Set([
       '@/lib/api/http',
       '@/lib/api/schemas',
       '@/lib/council/snapshot',
       '@/lib/db/repo',
+      '@/lib/personas/types',
       '@/lib/session/turns',
       '@/lib/session/view',
     ])
@@ -151,6 +156,13 @@ describe('lib/db/repo.ts', () => {
       'touchSession',
       'reopenSession',
       'markSessionCompleted',
+      'listPersonas',
+      'findPersona',
+      'insertPersona',
+      'updatePersona',
+      'archivePersona',
+      'deletePersona',
+      'countPersonaReferences',
     ].filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
     // `findCouncilWithMembers` feeds snapshot *creation*; `listCouncils` feeds
     // the picker for a session that does not exist yet. Neither reads a session.
@@ -165,16 +177,23 @@ describe('lib/db/repo.ts', () => {
   it('covers every exported function of the module', () => {
     const exported = [...REPO_SOURCE.matchAll(/^export async function (\w+)/gm)].map((m) => m[1])
     expect(exported.sort()).toEqual([
+      'archivePersona',
       'bumpTurnCursor',
+      'countPersonaReferences',
+      'deletePersona',
       'findCouncilWithMembers',
+      'findPersona',
       'findSessionWithTurns',
+      'insertPersona',
       'insertSession',
       'insertTurn',
       'listCouncils',
+      'listPersonas',
       'listSessions',
       'markSessionCompleted',
       'reopenSession',
       'touchSession',
+      'updatePersona',
       'updateTurnInPlace',
     ])
   })

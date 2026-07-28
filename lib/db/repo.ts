@@ -15,15 +15,17 @@ import 'server-only'
  * `findCouncilWithMembers`, which feeds snapshot *creation*, and `listCouncils`,
  * which reads the council library for the picker on `/`.
  */
-import { asc, desc, eq, sql } from 'drizzle-orm'
+import { asc, count, desc, eq, sql } from 'drizzle-orm'
 
 import type { CouncilSnapshot } from '@/lib/council/types'
 import type { SnapshotSource } from '@/lib/council/snapshot'
 import { getDb } from '@/lib/db'
 import { councilMembers, councils, personas, sessions, turns } from '@/lib/db/schema'
+import type { PersonaSummary } from '@/lib/personas/types'
 
 export type SessionRow = typeof sessions.$inferSelect
 export type TurnRow = typeof turns.$inferSelect
+export type PersonaRow = typeof personas.$inferSelect
 
 /** One row of the sessions list on `/` (PRD §6: topic, council name, status, last activity). */
 export type SessionListItem = {
@@ -276,4 +278,124 @@ export async function markSessionCompleted(sessionId: string): Promise<SessionRo
     throw new Error(`Session ${sessionId} not found; its status was not changed.`)
   }
   return session
+}
+
+/** The four editable fields of PRD §6 screen 4; both create and replace send all of them. */
+export type PersonaInput = {
+  name: string
+  role: string
+  charter: string
+  color: string
+}
+
+/**
+ * The persona library, for the grid on `/personas` and the member pickers.
+ *
+ * Archived personas are omitted: they may not join a new speaking order, while
+ * every session that already ran keeps rendering from its own snapshot. This is
+ * a library read — no session row is touched and no join is made.
+ */
+export async function listPersonas(): Promise<PersonaSummary[]> {
+  return getDb()
+    .select({
+      id: personas.id,
+      name: personas.name,
+      role: personas.role,
+      charter: personas.charter,
+      color: personas.color,
+    })
+    .from(personas)
+    .where(eq(personas.archived, false))
+    .orderBy(asc(personas.name))
+}
+
+/** One persona by id, archived or not, or null when the id is unknown. */
+export async function findPersona(personaId: string): Promise<PersonaRow | null> {
+  const [persona] = await getDb()
+    .select()
+    .from(personas)
+    .where(eq(personas.id, personaId))
+    .limit(1)
+
+  return persona ?? null
+}
+
+/** Create a persona. `archived` and the timestamps come from the column defaults. */
+export async function insertPersona(input: PersonaInput): Promise<PersonaRow> {
+  const [persona] = await getDb().insert(personas).values(input).returning()
+
+  if (!persona) {
+    throw new Error('Persona insert returned no row.')
+  }
+  return persona
+}
+
+/**
+ * Replace a persona's four editable fields. Null when the id matched no row, so
+ * the caller can answer 404 rather than pretending the write happened.
+ */
+export async function updatePersona(
+  personaId: string,
+  patch: PersonaInput,
+): Promise<PersonaRow | null> {
+  const [persona] = await getDb()
+    .update(personas)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(eq(personas.id, personaId))
+    .returning()
+
+  return persona ?? null
+}
+
+/** Retire a persona from the library without removing the row. */
+export async function archivePersona(personaId: string): Promise<PersonaRow | null> {
+  const [persona] = await getDb()
+    .update(personas)
+    .set({ archived: true, updatedAt: new Date() })
+    .where(eq(personas.id, personaId))
+    .returning()
+
+  return persona ?? null
+}
+
+/** Remove a persona outright. Only safe once `countPersonaReferences` returns 0. */
+export async function deletePersona(personaId: string): Promise<void> {
+  await getDb().delete(personas).where(eq(personas.id, personaId))
+}
+
+/**
+ * How many places still refer to this persona — "referenced by any council or
+ * exists in history" (PRD §6 screen 4). Non-zero means `DELETE` must archive.
+ *
+ * The two halves are counted differently *because of* the snapshot rule:
+ *
+ * - Membership is counted by id, exactly, over `council_members`.
+ * - History is counted by **name**, over the frozen snapshots. A snapshot member
+ *   stores `{name, role, charter, color}` and no persona id (PRD §7), so
+ *   identity genuinely cannot be recovered — and that is the point: the copy is
+ *   what makes a past transcript immune to a later delete. Name matching can
+ *   therefore only produce a *false positive*, which archives instead of
+ *   deleting. That is the conservative direction, so it is the right error.
+ *
+ * Two small counts rather than one join: nothing here is on a render path.
+ */
+export async function countPersonaReferences(persona: {
+  id: string
+  name: string
+}): Promise<number> {
+  const db = getDb()
+
+  const [membership] = await db
+    .select({ value: count() })
+    .from(councilMembers)
+    .where(eq(councilMembers.personaId, persona.id))
+
+  const [history] = await db
+    .select({ value: count() })
+    .from(sessions)
+    .where(
+      sql`exists (select 1 from jsonb_array_elements(${sessions.councilSnapshot} -> 'members') as member where member ->> 'name' = ${persona.name})`,
+    )
+
+  return (membership?.value ?? 0) + (history?.value ?? 0)
 }

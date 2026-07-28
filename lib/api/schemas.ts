@@ -24,6 +24,34 @@ export const createSessionSchema = z.strictObject({
 /** `GET /api/sessions/[id]` — validated before it reaches Postgres, so a bad id is a 400 rather than a cast error. */
 export const sessionIdSchema = z.uuid('Session id must be a UUID.')
 
+/** `PUT`/`DELETE /api/personas/[id]` — a bad id is a 400 rather than a Postgres cast error. */
+export const personaIdSchema = z.uuid('Persona id must be a UUID.')
+
+/**
+ * `POST /api/personas` (create) and `PUT /api/personas/[id]` (replace).
+ *
+ * One schema for both verbs: the editor on `/personas` is a whole-record form
+ * that always sends all four fields, so a partial-update schema would be a
+ * shape with no caller (R2). Strict for the same reason as `createSessionSchema`
+ * — an unknown key is reported, never silently dropped.
+ *
+ * `archived` is deliberately not accepted: archiving is a server decision made
+ * by `DELETE` when the persona is still referenced, never something the client
+ * asks for (PRD §8).
+ */
+export const personaInputSchema = z.strictObject({
+  name: z.string().trim().min(1, 'Name is required.').max(80),
+  role: z
+    .string()
+    .trim()
+    .min(1, 'Role is required.')
+    .max(200)
+    // PRD §6 screen 4 calls role "one line"; a newline would break the grid row.
+    .refine((value) => !/[\r\n]/.test(value), 'Role must be a single line.'),
+  charter: z.string().trim().min(1, 'Charter is required.').max(5_000),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'Color must be a hex value like #2563eb.'),
+})
+
 /**
  * `POST /api/sessions/[id]/interject`. The content is the whole body — who
  * speaks next and which round the note lands in are derived server-side, so

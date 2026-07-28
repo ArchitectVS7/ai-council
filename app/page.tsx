@@ -9,6 +9,8 @@
  * must never need `DATABASE_URL`. A connection failure surfaces as an error
  * rather than an empty list (R4).
  */
+import Link from 'next/link'
+
 import NewSessionForm from '@/components/new-session-form'
 import SessionList from '@/components/session-list'
 import { listSessions } from '@/lib/db/repo'
@@ -20,7 +22,12 @@ export default async function SessionsPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">AI Council</h1>
+      <div className="flex items-baseline justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">AI Council</h1>
+        <Link href="/personas" className="text-sm text-slate-600 underline underline-offset-2">
+          Personas
+        </Link>
+      </div>
 
       <section aria-labelledby="new-session" className="flex flex-col gap-3">
         <h2 id="new-session" className="text-lg font-medium">
