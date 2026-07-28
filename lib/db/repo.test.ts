@@ -81,15 +81,18 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     }
   })
 
-  it('imports only the repo, the turn service, the pure snapshot builder, and the request/response helpers', () => {
+  it('imports only the repo, the session services, the pure snapshot builder, and the request/response helpers', () => {
     // `@/lib/llm` and `@/lib/db/*` are deliberately absent: a generating route
-    // reaches the provider and the database only through `@/lib/session/turns`.
+    // reaches the provider and the database only through `@/lib/session/turns`,
+    // and the GET route learns the provider name only through the server-only
+    // `@/lib/session/view`, which assembles its payload (T-013).
     const allowed = new Set([
       '@/lib/api/http',
       '@/lib/api/schemas',
       '@/lib/council/snapshot',
       '@/lib/db/repo',
       '@/lib/session/turns',
+      '@/lib/session/view',
     ])
     for (const file of ROUTE_FILES) {
       for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
