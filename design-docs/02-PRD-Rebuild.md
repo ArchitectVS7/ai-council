@@ -3,6 +3,7 @@
 **Status:** Draft for rebuild kickoff
 **Supersedes:** `01-PRD-As-Built.md` (retained as historical record only)
 **Date:** 2026-07-27
+**Amendments:** A1 (2026-07-28, convener directive at the T-016 gate) — per-session model selection: `sessions` gains a nullable `model` column, the new-session form gains a model picker (curated per-provider list, default = env `LLM_MODEL`), and the Chamber shows the effective model. Per-persona overrides remain deferred (§13).
 
 ---
 
@@ -91,7 +92,7 @@ Each generated turn is one LLM call:
   - Rounds ≥ 2: "Respond to the debate so far: rebut, concede, or build. Do not restate your opening."
   - Synthesis: "Synthesize the debate: (1) points of agreement, (2) unresolved disagreements with the strongest argument on each side, (3) a concrete recommendation."
 - **Transcript budget (deterministic):** include the topic, all Round-1 openings, all interjections and syntheses, and the most recent turns up to a fixed character budget (default 24,000 chars). If over budget, drop middle-round persona turns oldest-first. No LLM summarization in v2 — deterministic truncation only.
-- **Defaults:** temperature 0.7, `max_tokens` 700 per persona turn, 1200 for synthesis. One model for the whole app, set by env (`LLM_MODEL`). Per-persona model overrides are deferred (§13).
+- **Defaults:** temperature 0.7, `max_tokens` 700 per persona turn, 1200 for synthesis. App-default model set by env (`LLM_MODEL`); a session may override it at creation via the model picker (Amendment A1), stored on the session. Per-persona model overrides are deferred (§13).
 
 ### 5.3 Limits (cost/runaway guards)
 
@@ -109,7 +110,7 @@ Each generated turn is one LLM call:
 
 There is no marketing landing page, no dashboard, no settings screen in v2.
 
-1. **`/` — Sessions.** List (topic, council name, status, last activity) + "New session" (topic textarea + council picker + rounds override). This is the home page.
+1. **`/` — Sessions.** List (topic, council name, status, last activity) + "New session" (topic textarea + council picker + rounds override + model picker per Amendment A1). This is the home page.
 2. **`/sessions/[id]` — Chamber.** The product. Transcript as a threaded feed (persona-colored turns, interjections visually distinct, syntheses highlighted); controls: Step / Run round / Pause / Interject / Regenerate last / Synthesize / Reopen; Export Markdown (copy + download); turn counter; MOCK MODE badge when applicable.
 3. **`/councils` — Councils.** List + form-based editor: name, description, ordered member list (add/remove/reorder from persona library — plain buttons, **no drag-and-drop library**), default rounds. Editing a council never mutates past sessions (snapshot rule).
 4. **`/personas` — Personas.** Library grid + editor: name, role (one line), charter (multiline), color. Archive instead of delete when referenced by any council or session.
@@ -123,6 +124,7 @@ personas          id, name, role, charter, color, archived bool, created_at, upd
 councils          id, name, description, default_rounds int, archived bool, created_at, updated_at
 council_members   council_id FK, persona_id FK, position int   (PK: council_id, position)
 sessions          id, topic text, council_id FK nullable,
+                  model text nullable,                          -- per-session override; null = env default (A1)
                   council_snapshot jsonb NOT NULL,   -- {name, rounds, members:[{name, role, charter, color}]}
                   status enum(active|completed|abandoned),
                   turn_cursor int NOT NULL default 0,           -- server-authoritative position
