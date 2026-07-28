@@ -14,7 +14,7 @@ import 'server-only'
  * `councils` is joined in exactly one place — `findCouncilWithMembers`, which
  * feeds snapshot *creation*, not rendering.
  */
-import { asc, desc, eq } from 'drizzle-orm'
+import { asc, desc, eq, sql } from 'drizzle-orm'
 
 import type { CouncilSnapshot } from '@/lib/council/types'
 import type { SnapshotSource } from '@/lib/council/snapshot'
@@ -124,6 +124,87 @@ export async function insertSession(input: {
 
   if (!session) {
     throw new Error('Session insert returned no row.')
+  }
+  return session
+}
+
+/** A generated or convener-authored transcript row, exactly as it is persisted. */
+export type NewTurnInput = {
+  sessionId: string
+  seq: number
+  kind: TurnRow['kind']
+  /** From the snapshot; null for an interjection. */
+  speakerName: string | null
+  round: number
+  content: string
+  status: TurnRow['status']
+  /** The provider's message, verbatim, when `status` is `failed` (R4). */
+  error: string | null
+  model: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+}
+
+/** Append a turn. `UNIQUE(session_id, seq)` makes a duplicate slot a loud error. */
+export async function insertTurn(input: NewTurnInput): Promise<TurnRow> {
+  const [turn] = await getDb().insert(turns).values(input).returning()
+
+  if (!turn) {
+    throw new Error('Turn insert returned no row.')
+  }
+  return turn
+}
+
+/** The fields a retry or regeneration rewrites; `seq`, `kind`, and `round` never move. */
+export type TurnPatch = {
+  content: string
+  status: TurnRow['status']
+  error: string | null
+  model: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+}
+
+/** Rewrite one turn in place, keeping its id and its transcript slot. */
+export async function updateTurnInPlace(turnId: string, patch: TurnPatch): Promise<TurnRow> {
+  const [turn] = await getDb().update(turns).set(patch).where(eq(turns.id, turnId)).returning()
+
+  if (!turn) {
+    throw new Error(`Turn ${turnId} not found; nothing was updated.`)
+  }
+  return turn
+}
+
+/**
+ * Count one more generation attempt against the PRD §5.3 cap.
+ *
+ * Incremented in SQL rather than read-modify-write so two concurrent attempts
+ * cannot both write the same value.
+ */
+export async function bumpTurnCursor(sessionId: string): Promise<SessionRow> {
+  const [session] = await getDb()
+    .update(sessions)
+    .set({ turnCursor: sql`${sessions.turnCursor} + 1`, updatedAt: new Date() })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found; the turn cursor was not advanced.`)
+  }
+  return session
+}
+
+/** Flip a session to `completed` once its synthesis lands (PRD §5.1). */
+export async function markSessionCompleted(sessionId: string): Promise<SessionRow> {
+  const now = new Date()
+  const [session] = await getDb()
+    .update(sessions)
+    .set({ status: 'completed', completedAt: now, updatedAt: now })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found; its status was not changed.`)
   }
   return session
 }

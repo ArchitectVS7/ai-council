@@ -57,7 +57,13 @@ const REPO_SOURCE = readFileSync(REPO_FILE, 'utf8')
 
 describe('route handlers reach the database only through lib/db/repo.ts', () => {
   it('scans every route file under app/api', () => {
-    expect(ROUTE_FILES.map(posixRelative)).toEqual(['sessions/[id]/route.ts', 'sessions/route.ts'])
+    expect(ROUTE_FILES.map(posixRelative)).toEqual([
+      'sessions/[id]/advance/route.ts',
+      'sessions/[id]/retry-last/route.ts',
+      'sessions/[id]/route.ts',
+      'sessions/[id]/synthesize/route.ts',
+      'sessions/route.ts',
+    ])
   })
 
   it('imports no database machinery directly', () => {
@@ -75,12 +81,15 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     }
   })
 
-  it('imports only the repo, the pure snapshot builder, and the request/response helpers', () => {
+  it('imports only the repo, the turn service, the pure snapshot builder, and the request/response helpers', () => {
+    // `@/lib/llm` and `@/lib/db/*` are deliberately absent: a generating route
+    // reaches the provider and the database only through `@/lib/session/turns`.
     const allowed = new Set([
       '@/lib/api/http',
       '@/lib/api/schemas',
       '@/lib/council/snapshot',
       '@/lib/db/repo',
+      '@/lib/session/turns',
     ])
     for (const file of ROUTE_FILES) {
       for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
@@ -114,9 +123,32 @@ describe('lib/db/repo.ts', () => {
 
   it('joins councils in exactly one place: snapshot creation', () => {
     expect(functionBody(REPO_SOURCE, 'findCouncilWithMembers')).toMatch(/\bcouncils\b/)
-    const joiners = ['listSessions', 'findSessionWithTurns', 'insertSession', 'findCouncilWithMembers']
-      .filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
+    // Every exported function in the module, so the guard cannot be outgrown.
+    const joiners = [
+      'listSessions',
+      'findSessionWithTurns',
+      'insertSession',
+      'findCouncilWithMembers',
+      'insertTurn',
+      'updateTurnInPlace',
+      'bumpTurnCursor',
+      'markSessionCompleted',
+    ].filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
     expect(joiners).toEqual(['findCouncilWithMembers'])
+  })
+
+  it('covers every exported function of the module', () => {
+    const exported = [...REPO_SOURCE.matchAll(/^export async function (\w+)/gm)].map((m) => m[1])
+    expect(exported.sort()).toEqual([
+      'bumpTurnCursor',
+      'findCouncilWithMembers',
+      'findSessionWithTurns',
+      'insertSession',
+      'insertTurn',
+      'listSessions',
+      'markSessionCompleted',
+      'updateTurnInPlace',
+    ])
   })
 
   it('stores council_id as provenance on insert without reading it back for rendering', () => {

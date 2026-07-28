@@ -67,7 +67,10 @@ export const sessions = pgTable('sessions', {
   councilId: uuid('council_id').references(() => councils.id, { onDelete: 'set null' }),
   councilSnapshot: jsonb('council_snapshot').$type<CouncilSnapshot>().notNull(),
   status: sessionStatus('status').notNull().default('active'),
-  /** Server-authoritative position in the speaking order. */
+  /**
+   * Server-authoritative count of generation attempts, checked against the PRD
+   * §5.3 cap of 60. Regenerations and retries count; interjections do not.
+   */
   turnCursor: integer('turn_cursor').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

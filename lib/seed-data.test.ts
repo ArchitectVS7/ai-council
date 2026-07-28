@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { CHAIR_PERSONA_NAME, seedCouncils, seedPersonas } from './seed-data'
+import { CHAIR_PERSONA, CHAIR_PERSONA_NAME, seedCouncils, seedPersonas } from './seed-data'
 
 // PRD §5.3 (`design-docs/02-PRD-Rebuild.md`): "Council: 2–8 personas. Rounds per run: 1–5."
 const MIN_MEMBERS = 2
@@ -39,6 +39,21 @@ describe('seedPersonas', () => {
 
   it('includes The Chair as a persona', () => {
     expect(personaNames).toContain(CHAIR_PERSONA_NAME)
+  })
+})
+
+describe('CHAIR_PERSONA', () => {
+  it('is the single definition seeded into the persona list', () => {
+    expect(CHAIR_PERSONA.name).toBe(CHAIR_PERSONA_NAME)
+    // Identity, not equality: one object, so the seeded row and the constant the
+    // synthesis prompt uses can never drift apart.
+    expect(seedPersonas.filter((p) => p === CHAIR_PERSONA)).toHaveLength(1)
+  })
+
+  it('carries the role and charter the synthesis prompt is built from', () => {
+    expect(CHAIR_PERSONA.role.trim()).not.toBe('')
+    expect(CHAIR_PERSONA.charter.trim().length).toBeGreaterThanOrEqual(80)
+    expect(CHAIR_PERSONA.color).toMatch(/^#[0-9a-f]{6}$/i)
   })
 })
 

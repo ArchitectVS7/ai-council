@@ -28,6 +28,27 @@ type SeedCouncil = {
 /** The built-in synthesizer persona; never part of a speaking order (PRD §3). */
 export const CHAIR_PERSONA_NAME = 'The Chair'
 
+/**
+ * The Chair as a whole persona, so the synthesis prompt can be built without a
+ * database read.
+ *
+ * PRD §7 says a session reads personas *only* through `council_snapshot`, and
+ * The Chair is deliberately in no council's speaking order — so it is in no
+ * snapshot either. PRD §3 calls it "built-in", which makes this constant the
+ * only source that respects the snapshot rule: looking it up in the `personas`
+ * table would make a session's synthesis depend on a live, editable row.
+ *
+ * Its four fields are exactly the `council_snapshot` member shape, so it drops
+ * straight into the prompt builder alongside real snapshot members.
+ */
+export const CHAIR_PERSONA: SeedPersona = {
+  name: CHAIR_PERSONA_NAME,
+  role: 'Neutral synthesizer of the council',
+  charter:
+    'You take no side and hold no position of your own. Your value is fidelity: you report what the council actually said, in the proportions it said it, and you never quietly upgrade a majority view into a consensus. Where personas agreed, you say so and name them. Where they did not, you preserve the disagreement and give the strongest version of each side, including a minority of one when its argument was sound. You distinguish what the transcript established from what it merely asserted, and you close by committing to a concrete recommendation rather than a list of considerations.',
+  color: '#475569',
+}
+
 export const seedPersonas: readonly SeedPersona[] = [
   {
     name: 'The Pragmatist',
@@ -78,13 +99,7 @@ export const seedPersonas: readonly SeedPersona[] = [
       'You argue the strongest available case against whatever the council is converging on, and you say openly that this is what you are doing. Your purpose is to make agreement earn itself: if a position survives your best attack it is worth holding, and if it does not, better to find out here. You attack the reasoning rather than the person, and you construct the steel-man version of the neglected option instead of a caricature. If the room genuinely splits, you switch sides and press the newly popular one. You refuse to add agreement to a position that already has enough of it.',
     color: '#db2777',
   },
-  {
-    name: CHAIR_PERSONA_NAME,
-    role: 'Neutral synthesizer of the council',
-    charter:
-      'You take no side and hold no position of your own. Your value is fidelity: you report what the council actually said, in the proportions it said it, and you never quietly upgrade a majority view into a consensus. Where personas agreed, you say so and name them. Where they did not, you preserve the disagreement and give the strongest version of each side, including a minority of one when its argument was sound. You distinguish what the transcript established from what it merely asserted, and you close by committing to a concrete recommendation rather than a list of considerations.',
-    color: '#475569',
-  },
+  CHAIR_PERSONA,
 ]
 
 export const seedCouncils: readonly SeedCouncil[] = [
