@@ -1,0 +1,127 @@
+/**
+ * Architectural guard for T-011: route handlers reach the database only through
+ * `lib/db/repo.ts`, and the session read paths never join `councils` (PRD §7
+ * snapshot rule). Both are static properties of the source, so they are checked
+ * by reading it — no database required, which keeps the gate DB-free.
+ */
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { describe, expect, it } from 'vitest'
+
+const REPO_FILE = fileURLToPath(new URL('./repo.ts', import.meta.url))
+const API_DIR = fileURLToPath(new URL('../../app/api', import.meta.url))
+
+function findRouteFiles(dir: string): string[] {
+  const found: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) found.push(...findRouteFiles(path))
+    else if (entry.name === 'route.ts' || entry.name === 'route.tsx') found.push(path)
+  }
+  return found
+}
+
+const ROUTE_FILES = findRouteFiles(API_DIR).sort()
+
+function posixRelative(path: string): string {
+  return relative(API_DIR, path).split(sep).join('/')
+}
+
+/** Every module specifier a file imports from, as written in source. */
+function importSpecifiers(source: string): string[] {
+  const specifiers: string[] = []
+  const patterns = [
+    /\bfrom\s+['"]([^'"]+)['"]/g,
+    /\bimport\s+['"]([^'"]+)['"]/g,
+    /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ]
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) specifiers.push(match[1])
+  }
+  return specifiers
+}
+
+/** The source of one top-level `export ... function <name>` declaration. */
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`export async function ${name}`)
+  expect(start, `repo.ts has no exported function "${name}"`).toBeGreaterThanOrEqual(0)
+  const rest = source.slice(start + 1)
+  const end = rest.indexOf('\nexport ')
+  return end === -1 ? rest : rest.slice(0, end)
+}
+
+const REPO_SOURCE = readFileSync(REPO_FILE, 'utf8')
+
+describe('route handlers reach the database only through lib/db/repo.ts', () => {
+  it('scans every route file under app/api', () => {
+    expect(ROUTE_FILES.map(posixRelative)).toEqual(['sessions/[id]/route.ts', 'sessions/route.ts'])
+  })
+
+  it('imports no database machinery directly', () => {
+    // `@/lib/db/repo` is the single permitted door; `@/lib/db` (the drizzle
+    // handle), `@/lib/db/schema`, drizzle itself, and the driver are all closed.
+    const forbidden = /^(drizzle-orm|@neondatabase)|(^|\/)lib\/db($|\/(?!repo$))/
+
+    for (const file of ROUTE_FILES) {
+      for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
+        expect(
+          specifier,
+          `${posixRelative(file)} imports "${specifier}"; route handlers may only use @/lib/db/repo`,
+        ).not.toMatch(forbidden)
+      }
+    }
+  })
+
+  it('imports only the repo, the pure snapshot builder, and the request/response helpers', () => {
+    const allowed = new Set([
+      '@/lib/api/http',
+      '@/lib/api/schemas',
+      '@/lib/council/snapshot',
+      '@/lib/db/repo',
+    ])
+    for (const file of ROUTE_FILES) {
+      for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
+        expect(allowed.has(specifier), `${posixRelative(file)} imports "${specifier}"`).toBe(true)
+      }
+    }
+  })
+
+  it('never names the councils table', () => {
+    for (const file of ROUTE_FILES) {
+      expect(readFileSync(file, 'utf8'), posixRelative(file)).not.toMatch(/\bcouncils\b/)
+    }
+  })
+})
+
+describe('lib/db/repo.ts', () => {
+  it('stays HTTP-agnostic — no Response construction, no status codes', () => {
+    expect(REPO_SOURCE).not.toMatch(/\bNextResponse\b/)
+    expect(REPO_SOURCE).not.toMatch(/\bResponse\.json\b/)
+    expect(REPO_SOURCE).not.toMatch(/next\/server/)
+  })
+
+  it.each(['listSessions', 'findSessionWithTurns'])(
+    '%s renders from council_snapshot and never joins councils (PRD §7)',
+    (name) => {
+      const body = functionBody(REPO_SOURCE, name)
+      expect(body).not.toMatch(/\bcouncils\b/)
+      expect(body).not.toMatch(/\binnerJoin\b|\bleftJoin\b/)
+    },
+  )
+
+  it('joins councils in exactly one place: snapshot creation', () => {
+    expect(functionBody(REPO_SOURCE, 'findCouncilWithMembers')).toMatch(/\bcouncils\b/)
+    const joiners = ['listSessions', 'findSessionWithTurns', 'insertSession', 'findCouncilWithMembers']
+      .filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
+    expect(joiners).toEqual(['findCouncilWithMembers'])
+  })
+
+  it('stores council_id as provenance on insert without reading it back for rendering', () => {
+    const body = functionBody(REPO_SOURCE, 'insertSession')
+    expect(body).toMatch(/councilId: input\.councilId/)
+    expect(body).toMatch(/councilSnapshot: input\.snapshot/)
+  })
+})
