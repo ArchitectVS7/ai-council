@@ -8,7 +8,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ChamberView } from '@/lib/chamber/types'
+import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
 import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 
 import Chamber from './chamber'
@@ -101,14 +101,15 @@ afterEach(() => {
 })
 
 describe('chamber transcript', () => {
-  it('renders every turn, with the synthesis labelled and the persona colour applied inline', () => {
+  it('renders every turn, with the only synthesis badged Result and the persona colour applied inline', () => {
     render(<Chamber initialView={fixture()} />)
 
     expect(within(screen.getByRole('list', { name: 'Transcript' })).getAllByRole('listitem')).toHaveLength(3)
     expect(screen.getByText('Pragmatist')).toBeTruthy()
     expect(screen.getByText('The build is green; ship it.')).toBeTruthy()
     expect(screen.getByText('The Chair')).toBeTruthy()
-    expect(screen.getByText('Synthesis')).toBeTruthy()
+    // The lone complete synthesis is the latest, so it carries the result badge.
+    expect(screen.getByText('Result')).toBeTruthy()
 
     // Colours come from the council snapshot, so they are inline styles rather
     // than classes (jsdom may serialise the hex as `rgb(...)`).
@@ -274,6 +275,244 @@ describe('chamber controls', () => {
     expect(screen.getByTestId('turn-counter').textContent).toBe('60 / 60')
     expect(button('Step').disabled).toBe(true)
     expect(button('Synthesize').disabled).toBe(true)
+  })
+})
+
+/** A transcript turn with fixture defaults; `seq` doubles as the id. */
+function turn(overrides: Partial<ChamberTurn> & { seq: number }): ChamberTurn {
+  return {
+    id: `t-${overrides.seq}`,
+    kind: 'persona',
+    speakerName: 'Pragmatist',
+    round: 1,
+    content: 'The build is green; ship it.',
+    status: 'complete',
+    error: null,
+    ...overrides,
+  }
+}
+
+/** The base fixture with a different session status or cursor. */
+function sessionFixture(
+  patch: Partial<ChamberView['session']>,
+  turns?: ChamberTurn[],
+): ChamberView {
+  const base = fixture()
+  return {
+    ...base,
+    session: { ...base.session, ...patch },
+    ...(turns === undefined ? {} : { turns }),
+  }
+}
+
+describe('chamber interjection', () => {
+  const INTERJECTED = [
+    turn({ seq: 0 }),
+    turn({ seq: 1, kind: 'interjection', speakerName: null, content: 'Stay on the rollback question.' }),
+  ]
+
+  it('styles an interjection differently from a persona turn', () => {
+    render(<Chamber initialView={fixture({ turns: INTERJECTED })} />)
+
+    const persona = screen.getByTestId('turn-0')
+    const interjection = screen.getByTestId('turn-1')
+
+    expect(interjection.className).not.toBe(persona.className)
+    // Asserted on a marker of the interjection branch, so collapsing the two
+    // branches into one fails here rather than passing on a coincidence.
+    expect(interjection.className).toContain('italic')
+    expect(persona.className).not.toContain('italic')
+
+    expect(within(interjection).getByText('Convener')).toBeTruthy()
+    expect(within(interjection).getByText('Interjection')).toBeTruthy()
+    expect(within(persona).queryByText('Interjection')).toBeNull()
+  })
+
+  it('posts the note as JSON and reloads the session from the server', async () => {
+    const fetchSpy = stubFetch(async (url) =>
+      url.endsWith('/interject') ? json({ ok: true, turn: { id: 't-1', seq: 1 } }) : json(fixture()),
+    )
+
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+    const box = screen.getByLabelText('Interject') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'Stay on the rollback question.' } })
+    fireEvent.click(button('Interject'))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(fetchSpy.mock.calls[0][0]).toBe(`/api/sessions/${SESSION_ID}/interject`)
+    const init = fetchSpy.mock.calls[0][1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
+    expect(init.body).toBe(JSON.stringify({ content: 'Stay on the rollback question.' }))
+    // The refetch is the plain GET — the note is never appended locally.
+    expect(fetchSpy.mock.calls[1][0]).toBe(`/api/sessions/${SESSION_ID}`)
+    expect(fetchSpy.mock.calls[1][1]).toBeUndefined()
+
+    await waitFor(() => expect(box.value).toBe(''))
+  })
+
+  it('surfaces a refusal verbatim and keeps the typed note', async () => {
+    const refusal = 'The most recent turn failed; retry it before adding an interjection.'
+    const fetchSpy = stubFetch(async () => json({ error: refusal }, 409))
+
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+    const box = screen.getByLabelText('Interject') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'Stay on the rollback question.' } })
+    fireEvent.click(button('Interject'))
+
+    expect((await screen.findByRole('alert')).textContent).toBe(refusal)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(box.value).toBe('Stay on the rollback question.')
+  })
+
+  it('refuses to post an empty or whitespace-only note', () => {
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+
+    expect(button('Interject').disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Interject'), { target: { value: '   ' } })
+    expect(button('Interject').disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Interject'), { target: { value: 'Say more about cost.' } })
+    expect(button('Interject').disabled).toBe(false)
+  })
+
+  it('stays live at the turn cap, where generation is blocked', () => {
+    render(<Chamber initialView={sessionFixture({ turnCursor: 60 }, [turn({ seq: 0 })])} />)
+    fireEvent.change(screen.getByLabelText('Interject'), { target: { value: 'One more thing.' } })
+
+    expect(button('Step').disabled).toBe(true)
+    // A note generates nothing, so the cap must not block it (PRD §5.3).
+    expect(button('Interject').disabled).toBe(false)
+  })
+
+  it('is blocked on a session that is no longer active', () => {
+    render(<Chamber initialView={sessionFixture({ status: 'completed' }, [turn({ seq: 0 })])} />)
+    fireEvent.change(screen.getByLabelText('Interject'), { target: { value: 'One more thing.' } })
+
+    expect(button('Interject').disabled).toBe(true)
+  })
+})
+
+describe('chamber regenerate', () => {
+  const cases: Array<[string, ChamberView, boolean]> = [
+    ['a complete persona turn is latest', fixture({ turns: [turn({ seq: 0 })] }), false],
+    [
+      'a complete synthesis is latest',
+      fixture({ turns: [turn({ seq: 0 }), turn({ seq: 1, kind: 'synthesis', speakerName: 'The Chair' })] }),
+      false,
+    ],
+    [
+      'the latest turn failed',
+      fixture({ turns: [turn({ seq: 0, status: 'failed', content: '', error: PROVIDER_ERROR })] }),
+      true,
+    ],
+    [
+      'the latest turn is an interjection',
+      fixture({ turns: [turn({ seq: 0 }), turn({ seq: 1, kind: 'interjection', speakerName: null })] }),
+      true,
+    ],
+    ['there are no turns yet', fixture({ turns: [] }), true],
+    ['the session is at the turn cap', sessionFixture({ turnCursor: 60 }, [turn({ seq: 0 })]), true],
+    ['the session is completed', sessionFixture({ status: 'completed' }, [turn({ seq: 0 })]), true],
+  ]
+
+  for (const [name, view, expected] of cases) {
+    it(`is ${expected ? 'disabled' : 'enabled'} when ${name}`, () => {
+      render(<Chamber initialView={view} />)
+
+      expect(button('Regenerate last').disabled).toBe(expected)
+    })
+  }
+
+  it('posts to regenerate-last and reloads', async () => {
+    const fetchSpy = stubFetch(async (url) =>
+      url.endsWith('/regenerate-last') ? json(COMPLETE_TURN) : json(fixture()),
+    )
+
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+    fireEvent.click(button('Regenerate last'))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(fetchSpy.mock.calls[0][0]).toBe(`/api/sessions/${SESSION_ID}/regenerate-last`)
+    expect(fetchSpy.mock.calls[0][1]).toEqual({ method: 'POST' })
+    expect(fetchSpy.mock.calls[1][0]).toBe(`/api/sessions/${SESSION_ID}`)
+  })
+})
+
+describe('chamber reopen', () => {
+  it('is absent on an active session', () => {
+    render(<Chamber initialView={fixture()} />)
+
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull()
+  })
+
+  it('is absent on an abandoned session', () => {
+    render(<Chamber initialView={sessionFixture({ status: 'abandoned' })} />)
+
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull()
+  })
+
+  it('is shown and live on a completed session', () => {
+    render(<Chamber initialView={sessionFixture({ status: 'completed' })} />)
+
+    expect(button('Reopen').disabled).toBe(false)
+  })
+
+  it('posts to reopen and lets the refetched status restore the round controls', async () => {
+    // The endpoint answers without a `turn` key; reading one would throw.
+    const fetchSpy = stubFetch(async (url) =>
+      url.endsWith('/reopen')
+        ? json({ ok: true, session: { id: SESSION_ID, status: 'active' } })
+        : json(fixture({ turns: [turn({ seq: 0 })] })),
+    )
+
+    render(<Chamber initialView={sessionFixture({ status: 'completed' }, [turn({ seq: 0 })])} />)
+    expect(button('Step').disabled).toBe(true)
+
+    fireEvent.click(button('Reopen'))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    expect(fetchSpy.mock.calls[0][0]).toBe(`/api/sessions/${SESSION_ID}/reopen`)
+    expect(fetchSpy.mock.calls[0][1]).toEqual({ method: 'POST' })
+    expect(fetchSpy.mock.calls[1][0]).toBe(`/api/sessions/${SESSION_ID}`)
+
+    // Restored by server state, not by a local guess.
+    await waitFor(() => expect(button('Step').disabled).toBe(false))
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull()
+  })
+})
+
+describe('chamber synthesis labelling', () => {
+  it('labels only the latest of two syntheses Result', () => {
+    const turns = [
+      turn({ seq: 0 }),
+      turn({ seq: 1, kind: 'synthesis', speakerName: 'The Chair', content: 'First reading.' }),
+      turn({ seq: 2, round: 2 }),
+      turn({ seq: 3, kind: 'synthesis', speakerName: 'The Chair', round: 2, content: 'Second reading.' }),
+    ]
+    render(<Chamber initialView={fixture({ turns })} />)
+
+    expect(screen.getAllByText('Result')).toHaveLength(1)
+    expect(within(screen.getByTestId('turn-3')).getByText('Result')).toBeTruthy()
+    expect(within(screen.getByTestId('turn-1')).getByText('Synthesis')).toBeTruthy()
+    expect(within(screen.getByTestId('turn-1')).queryByText('Result')).toBeNull()
+  })
+
+  it('does not let a failed later synthesis steal the label', () => {
+    const turns = [
+      turn({ seq: 1, kind: 'synthesis', speakerName: 'The Chair', content: 'First reading.' }),
+      turn({
+        seq: 3,
+        kind: 'synthesis',
+        speakerName: 'The Chair',
+        status: 'failed',
+        content: '',
+        error: PROVIDER_ERROR,
+      }),
+    ]
+    render(<Chamber initialView={fixture({ turns })} />)
+
+    expect(within(screen.getByTestId('turn-1')).getByText('Result')).toBeTruthy()
+    expect(within(screen.getByTestId('turn-3')).getByText('Synthesis')).toBeTruthy()
   })
 })
 
