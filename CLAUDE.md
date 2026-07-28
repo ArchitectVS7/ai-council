@@ -1,109 +1,119 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## Project Overview
 
-AI Council is a configurable multi-persona AI discussion simulator built with Next.js. It orchestrates debates between different AI personas (like Moderator, Empathy Advocate, Skeptical Academic) through a deterministic state machine flow to analyze topics from multiple perspectives.
+AI Council lets a user convene a panel of AI personas to examine a topic in structured
+rounds. Each persona holds a distinct charter (perspective, expertise, disposition), sees the
+full transcript, and must engage the other members' arguments directly. The user is the
+convener: let rounds run, interject to steer, regenerate a weak turn, and close the session
+with a synthesis from the Chair stating where the council agrees, where it does not, and what
+it recommends. Sessions persist and export as clean Markdown. Anything outside that loop is
+out of scope.
 
-## Development Commands
+This is **v2**, a clean-room rebuild on the `v2` branch. The v1 application was deleted, not
+migrated.
 
-**Package Manager**: The project uses npm (specified in package.json as packageManager). However, the README mentions pnpm preference.
+## Source of Truth
+
+`design-docs/02-PRD-Rebuild.md` is normative. In particular:
+
+- §3 — glossary (canonical vocabulary)
+- §5 — the core loop (functional spec)
+- §7 — data model (5 tables, final for v2)
+- §8 — API surface (complete route list)
+- §9 — technology decisions
+
+`design-docs/01-PRD-As-Built.md` and `design-docs/User Manual.md` are historical records of
+v1. Read them for context only; never follow them.
+
+`TASKS.md` holds the task list and the orchestrator protocol.
+
+## Glossary
+
+Approved nouns — use exactly these, in code, UI copy, and docs:
+
+| Term | Meaning |
+|---|---|
+| **Persona** | A named AI participant: name, role, charter (system-prompt text), avatar color. |
+| **Council** | A reusable configuration: an ordered list of personas + number of rounds. |
+| **Session** | One run of a council on one topic. Owns a transcript. Snapshots its council at creation. |
+| **Turn** | One entry in a transcript: a persona statement, a user interjection, or a synthesis. |
+| **Round** | One full pass through the council's speaking order. |
+| **Interjection** | A user-authored turn that steers the session. |
+| **Synthesis** | The closing turn: agreements, open disagreements, recommendation. Produced by the Chair. |
+| **The Chair** | A built-in synthesizer persona present in every session (not part of the speaking order). |
+
+Banned words: *flow*, *workflow*, *template*, *debate* (as a noun for the entity),
+*discussion*, *agent*. If a concept needs a new word, amend the PRD §3 table first.
+
+## Standing Rules
+
+- **No code without a caller.** Every module, export, and dependency must be reachable from a
+  real entry point. `knip` is a gate, not advice.
+- **Fail loudly.** No silent fallbacks, no swallowed errors, no invented data. Mock responses
+  exist only under `LLM_PROVIDER=mock`.
+- **Snapshot rule.** A session renders only from its `council_snapshot`. `council_id` is
+  provenance; it is never read to build a transcript.
+- **Server-authoritative state.** The server owns session progression; the client renders and
+  sends intents. No client-side orchestration.
+- **5 tables max.** No table beyond PRD §7 without amending the PRD.
+- **< 15 production dependencies.** Adding one requires a justifying note.
+
+## Stack
+
+- Next.js 15 (App Router) + TypeScript (strict) + Tailwind CSS 3
+- Neon Postgres + Drizzle ORM (lands in a later task; not yet installed)
+- Vitest + Testing Library for tests (`jsdom` opted into per file via a
+  `// @vitest-environment jsdom` docblock; everything else runs in `node`)
+- ESLint (`next/core-web-vitals`), knip
+- Package manager: **npm** (not pnpm)
+
+Tests are colocated as `*.test.ts` / `*.test.tsx` next to the code they cover. There is no
+`__tests__/` directory.
+
+## Commands
 
 ```bash
-# Install dependencies
-npm install
-# or (preferred per README)
-pnpm install
-
-# Development server
-npm run dev
-# or
-pnpm dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
-
-# Lint the code
-npm run lint
+npm install       # install dependencies
+npm run dev       # development server
+npm run build     # production build
+npm start         # serve the production build
+npm run lint      # eslint
+npm run test      # vitest, single run
+npm run typecheck # tsc --noEmit
+npm run knip      # unused files / exports / dependencies
+npm run check     # typecheck && lint && test && knip  <- the gate
 ```
 
-## Architecture Overview
+`npm run check` and `npm run build` are the two gate commands. Neither may require
+`DATABASE_URL`, an API key, or network access.
 
-### Core Components
-- **State Machine** (`lib/stateMachine.ts`): Defines personas, debate flow, and step progression logic
-- **Debate Arena** (`components/debate-arena.tsx`): Main UI component managing debate sessions
-- **API Route** (`app/api/complete/route.ts`): Proxy for LLM completions to keep API keys server-side
+## Environment
 
-### Key Concepts
-- **Personas**: Configurable AI participants with id, name, role, and task
-- **State Flow**: Array of persona indices executed in sequence across rounds  
-- **Messages**: Transcript entries with persona, content, timestamp, and round
-- **Context Passing**: Each persona receives the previous persona's output as context
+`.env.example` lists the only five variables the app reads:
 
-### Default Configuration
-- **Moderator**: Extracts bullet points and ensures clarity
-- **Empathy Advocate**: Considers human impact, ethics, inclusion
-- **Skeptical Academic**: Challenges assumptions with evidence
-- **Flow**: Empathy → Moderator → Skeptic → Moderator (repeated for 2 rounds)
+`DATABASE_URL`, `LLM_PROVIDER` (`anthropic` | `openai` | `mock`), `LLM_MODEL`
+(default `claude-sonnet-5`), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
 
-### Data Types
-```typescript
-type PersonaConfig = { id: number; name: string; role: string; task: string }
-type Message = { persona: string; personaId: number; content: string; timestamp: string; round: number | 'Final' }
-type AppConfig = { personas: PersonaConfig[]; stateFlow: number[]; numRounds: number }
-```
+Copy it to `.env.local` for local runs. Do not add a sixth variable without a PRD amendment.
 
-## Project Structure
+## Structure
+
+This is the tree as it exists today, not an aspiration:
 
 ```
-app/                    # Next.js App Router
-├── api/complete/       # LLM completion proxy API
-├── layout.tsx         # Root layout
-├── page.tsx           # Home page with DebateArena
-└── starter/           # Original Postgres demo (preserved)
-
-components/             # React components
-├── debate-arena.tsx   # Main debate interface
-└── [other UI components]
-
-lib/                   # Shared utilities
-├── stateMachine.ts    # Core debate logic
-├── seed.ts           # Database seeding
-└── utils.ts          # General utilities
-
-design-docs/           # Product requirements
-├── PRD.md            # Detailed product spec
-└── planning.md       # Implementation planning
+app/                 # Next.js App Router
+├── globals.css      # Tailwind directives + base styles
+├── layout.tsx       # root layout
+├── page.tsx         # placeholder home page
+└── page.test.tsx    # smoke test
+design-docs/         # PRDs and v1 historical records
+TASKS.md             # task list + orchestrator protocol
+knip.json            # unused-code gate config
+vitest.config.ts     # test runner config
+next.config.js, postcss.config.js, tailwind.config.js, tsconfig.json, .eslintrc.json
 ```
 
-## Database Integration
-
-The project is designed to use Neon Postgres for persistence but currently operates client-side only. The `/starter` route contains a working Postgres demo. Database schema planning is documented in `design-docs/PRD.md`.
-
-**Environment**: Set `POSTGRES_URL` in `.env.local` for the starter demo.
-
-## LLM Integration
-
-The app uses a Next.js API route (`/api/complete`) as a proxy to LLM providers, keeping API keys secure on the server side. The client sends prompts with system/user messages and receives text responses.
-
-## Development Notes
-
-- **Dynamic Rendering**: Main page uses `export const dynamic = 'force-dynamic'`
-- **Client Components**: DebateArena is a client component using React hooks
-- **Styling**: Tailwind CSS with glassmorphism effects (backdrop-blur)
-- **Error Handling**: Comprehensive error logging in debug panel
-- **State Management**: Local React state with useState hooks
-
-## Future Implementation Areas
-
-Per the PRD, planned features include:
-- Persona editing UI
-- Flow configuration interface  
-- Database persistence for debates and configurations
-- Import/export functionality
-- Final analysis generation
-- Human-in-the-loop editing mode
+Directories arrive when a task creates them with a caller. Do not scaffold empty ones.

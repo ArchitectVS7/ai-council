@@ -1,37 +1,16 @@
 import './globals.css'
-import { Inter } from 'next/font/google'
-import { HelpProvider } from '@/components/help/HelpProvider'
-import HelpSystem from '@/components/help/HelpSystem'
-import GuidedTour from '@/components/help/GuidedTour'
-import OnboardingFlow from '@/components/help/OnboardingFlow'
+
+import type { ReactNode } from 'react'
 
 export const metadata = {
-  metadataBase: new URL('https://ai-council.local'),
   title: 'AI Council',
-  description: 'Configurable multi-persona AI discussion simulator',
+  description: 'Convene a panel of AI personas on a topic.',
 }
 
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-  display: 'swap',
-})
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body className={inter.variable}>
-        <HelpProvider>
-          {children}
-          <HelpSystem />
-          <GuidedTour />
-          <OnboardingFlow />
-        </HelpProvider>
-      </body>
+      <body>{children}</body>
     </html>
   )
 }
