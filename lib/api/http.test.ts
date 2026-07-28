@@ -69,6 +69,8 @@ describe('turnFailureResponse', () => {
     ['awaiting-retry', 409],
     ['nothing-to-retry', 409],
     ['nothing-to-synthesize', 409],
+    ['nothing-to-regenerate', 409],
+    ['not-completed', 409],
     ['cap-reached', 422],
   ]
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  ADDRESS_INTERJECTION_INSTRUCTION,
+  CONVENER_NOTE_HEADING,
   DEFAULT_TEMPERATURE,
   MAX_WORDS_PER_TURN,
   PERSONA_MAX_TOKENS,
@@ -227,5 +229,116 @@ describe('buildTurnPrompt composition', () => {
     const options: GenerateOptionsShape = built
     expect(options.system.length).toBeGreaterThan(0)
     expect(options.prompt.length).toBeGreaterThan(0)
+  })
+})
+
+describe('addressing a pending interjection (PRD §5.2)', () => {
+  const NOTE = 'Stop arguing about tooling and cost the migration in engineer-months.'
+  const OLDER_NOTE = 'Please keep the customer in view.'
+
+  function note(seq: number, content: string, over: Partial<TranscriptTurn> = {}): TranscriptTurn {
+    return makeTurn({ seq, kind: 'interjection', speakerName: null, content, ...over })
+  }
+
+  function build(turns: TranscriptTurn[], speaker = SNAPSHOT.members[1], round = 2) {
+    return buildTurnPrompt({
+      topic: 'Rewrite in Rust?',
+      snapshot: SNAPSHOT,
+      turns,
+      speaker,
+      round,
+      kind: round === 1 ? 'opening' : 'rebuttal',
+    })
+  }
+
+  /** The note block only, so a match cannot come from the transcript rendering. */
+  function noteBlock(prompt: string): string {
+    const start = prompt.indexOf(CONVENER_NOTE_HEADING)
+    expect(start).toBeGreaterThanOrEqual(0)
+    return prompt.slice(start)
+  }
+
+  it('adds nothing when there is no interjection', () => {
+    const built = build([makeTurn({ seq: 0 })])
+
+    expect(built.prompt).not.toContain(CONVENER_NOTE_HEADING)
+    expect(built.prompt).not.toContain(ADDRESS_INTERJECTION_INSTRUCTION)
+  })
+
+  it('quotes the interjection text and instructs the speaker to address it', () => {
+    const built = build([makeTurn({ seq: 0 }), note(1, NOTE)])
+
+    expect(built.prompt).toContain(NOTE)
+    expect(built.prompt).toContain(ADDRESS_INTERJECTION_INSTRUCTION)
+    // Between the transcript and the task, adjacent to the round instruction.
+    expect(built.prompt.indexOf('TRANSCRIPT:')).toBeLessThan(
+      built.prompt.indexOf(CONVENER_NOTE_HEADING),
+    )
+    expect(built.prompt.indexOf(CONVENER_NOTE_HEADING)).toBeLessThan(
+      built.prompt.indexOf('YOUR TASK (Round 2)'),
+    )
+    expect(built.prompt.indexOf(ROUND_INSTRUCTIONS.rebuttal)).toBeLessThan(
+      built.prompt.indexOf(ADDRESS_INTERJECTION_INSTRUCTION),
+    )
+  })
+
+  it('quotes only the latest interjection', () => {
+    const built = build([makeTurn({ seq: 0 }), note(1, OLDER_NOTE), note(2, NOTE)])
+
+    const block = noteBlock(built.prompt)
+    expect(block).toContain(NOTE)
+    expect(block).not.toContain(OLDER_NOTE)
+    // The older note is still visible in the transcript — nothing is hidden.
+    expect(built.prompt).toContain(OLDER_NOTE)
+  })
+
+  it('is pending only for speakers who have not spoken since it landed', () => {
+    const turns = [
+      note(0, NOTE),
+      makeTurn({ seq: 1, speakerName: 'The Pragmatist', content: 'answered it' }),
+    ]
+
+    // The Pragmatist already had its say after the note.
+    expect(build(turns, SNAPSHOT.members[0]).prompt).not.toContain(CONVENER_NOTE_HEADING)
+    // The Skeptic has not.
+    expect(noteBlock(build(turns, SNAPSHOT.members[1]).prompt)).toContain(NOTE)
+  })
+
+  it('stays pending across the speaker’s own failed turn, so the retry addresses it', () => {
+    const turns = [
+      note(0, NOTE),
+      makeTurn({ seq: 1, speakerName: 'The Skeptic', status: 'failed', content: '' }),
+    ]
+
+    expect(noteBlock(build(turns, SNAPSHOT.members[1]).prompt)).toContain(NOTE)
+  })
+
+  it('ignores an interjection that itself failed', () => {
+    const built = build([makeTurn({ seq: 0 }), note(1, NOTE, { status: 'failed' })])
+    expect(built.prompt).not.toContain(CONVENER_NOTE_HEADING)
+  })
+
+  it('applies to the Chair: a note after the previous synthesis is pending', () => {
+    const answered = [
+      makeTurn({ seq: 0 }),
+      note(1, NOTE),
+      makeTurn({ seq: 2, kind: 'synthesis', speakerName: CHAIR.name, content: 'first result' }),
+    ]
+    const chairBuild = (turns: TranscriptTurn[]) =>
+      buildTurnPrompt({
+        topic: 'Rewrite in Rust?',
+        snapshot: SNAPSHOT,
+        turns,
+        speaker: CHAIR,
+        round: 3,
+        kind: 'synthesis',
+      })
+
+    expect(chairBuild(answered).prompt).not.toContain(CONVENER_NOTE_HEADING)
+
+    const reopened = [...answered, note(3, 'Now weigh the rollback plan.', { round: 3 })]
+    const block = noteBlock(chairBuild(reopened).prompt)
+    expect(block).toContain('Now weigh the rollback plan.')
+    expect(block).toContain('(Round 3)')
   })
 })

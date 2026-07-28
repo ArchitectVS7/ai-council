@@ -34,6 +34,53 @@ export const ROUND_INSTRUCTIONS: Readonly<Record<RoundType, string>> = Object.fr
 
 const EMPTY_TRANSCRIPT_PLACEHOLDER = '(No turns yet. You speak first.)'
 
+/**
+ * Heading of the block that quotes the convener's pending interjection.
+ * Exported so callers and tests assert against the constant rather than a
+ * substring that could drift.
+ */
+export const CONVENER_NOTE_HEADING = "CONVENER'S LATEST NOTE"
+
+/**
+ * PRD §5.2: "Address the most recent interjection if one exists since your last
+ * turn." The system prompt states that rule generically for every turn; this is
+ * the explicit, text-referencing form added only when there is a note to address.
+ */
+export const ADDRESS_INTERJECTION_INSTRUCTION =
+  "Address the convener's latest note above directly: acknowledge it explicitly and let it shape this response."
+
+/**
+ * The interjection this speaker has not answered yet, or null.
+ *
+ * "Since your last turn" (PRD §5.2) is read off the transcript: the newest
+ * usable interjection with a `seq` above the speaker's own newest *complete*
+ * turn. A speaker who has never spoken has no floor, so every interjection so
+ * far is pending and the newest one wins. The Chair resolves the same way — its
+ * previous syntheses carry its name in `speakerName`.
+ *
+ * Module-local: the prompt is the only thing that needs this, and an export
+ * without a caller would be dead code (R2 / knip).
+ */
+function pendingInterjection(
+  turns: TranscriptTurn[],
+  speakerName: string,
+): TranscriptTurn | null {
+  let lastOwnSeq = -1
+  for (const turn of turns) {
+    if (turn.speakerName === speakerName && turn.status === 'complete' && turn.seq > lastOwnSeq) {
+      lastOwnSeq = turn.seq
+    }
+  }
+
+  let pending: TranscriptTurn | null = null
+  for (const turn of turns) {
+    if (turn.kind !== 'interjection' || turn.status === 'failed') continue
+    if (turn.seq <= lastOwnSeq) continue
+    if (pending === null || turn.seq > pending.seq) pending = turn
+  }
+  return pending
+}
+
 export type BuiltPrompt = {
   system: string
   prompt: string
@@ -105,6 +152,13 @@ function renderRoster(snapshot: CouncilSnapshot): string {
  * at eight short lines (PRD §5.3 caps a council at 8 personas) and it is what
  * makes the engage-by-name rule answerable. PRD §5.2 scopes the 24,000-char
  * budget to the topic plus the transcript.
+ *
+ * The convener's pending note is repeated verbatim between the transcript and
+ * the task, immediately before the instruction to address it. That text is
+ * already inside the transcript (the budgeter protects interjections from ever
+ * being dropped), so the repetition is purely for salience, and like the roster
+ * block it sits outside the 24,000-char budget — it is one short convener-
+ * authored note, bounded by the same input validation as the topic.
  */
 export function buildTurnPrompt(input: TurnPromptInput): BuiltPrompt {
   const budgeted = budgetTranscript({
@@ -118,6 +172,8 @@ export function buildTurnPrompt(input: TurnPromptInput): BuiltPrompt {
       ? EMPTY_TRANSCRIPT_PLACEHOLDER
       : budgeted.turns.map(formatTurn).join('\n\n')
 
+  const note = pendingInterjection(input.turns, input.speaker.name)
+
   const prompt = [
     'TOPIC:',
     input.topic,
@@ -128,8 +184,10 @@ export function buildTurnPrompt(input: TurnPromptInput): BuiltPrompt {
     'TRANSCRIPT:',
     transcript,
     '',
+    ...(note === null ? [] : [`${CONVENER_NOTE_HEADING} (Round ${note.round}):`, note.content, '']),
     `YOUR TASK (Round ${input.round}):`,
     ROUND_INSTRUCTIONS[input.kind],
+    ...(note === null ? [] : [ADDRESS_INTERJECTION_INSTRUCTION]),
   ].join('\n')
 
   return {

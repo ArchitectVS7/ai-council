@@ -60,6 +60,9 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     expect(ROUTE_FILES.map(posixRelative)).toEqual([
       'councils/route.ts',
       'sessions/[id]/advance/route.ts',
+      'sessions/[id]/interject/route.ts',
+      'sessions/[id]/regenerate-last/route.ts',
+      'sessions/[id]/reopen/route.ts',
       'sessions/[id]/retry-last/route.ts',
       'sessions/[id]/route.ts',
       'sessions/[id]/synthesize/route.ts',
@@ -145,6 +148,8 @@ describe('lib/db/repo.ts', () => {
       'insertTurn',
       'updateTurnInPlace',
       'bumpTurnCursor',
+      'touchSession',
+      'reopenSession',
       'markSessionCompleted',
     ].filter((name) => /\bcouncils\b/.test(functionBody(REPO_SOURCE, name)))
     // `findCouncilWithMembers` feeds snapshot *creation*; `listCouncils` feeds
@@ -168,6 +173,8 @@ describe('lib/db/repo.ts', () => {
       'listCouncils',
       'listSessions',
       'markSessionCompleted',
+      'reopenSession',
+      'touchSession',
       'updateTurnInPlace',
     ])
   })

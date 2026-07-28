@@ -23,3 +23,14 @@ export const createSessionSchema = z.strictObject({
 
 /** `GET /api/sessions/[id]` — validated before it reaches Postgres, so a bad id is a 400 rather than a cast error. */
 export const sessionIdSchema = z.uuid('Session id must be a UUID.')
+
+/**
+ * `POST /api/sessions/[id]/interject`. The content is the whole body — who
+ * speaks next and which round the note lands in are derived server-side, so
+ * there is nothing else for the caller to say (PRD §5.1). Strict for the same
+ * reason as above, and capped at the same 10,000 characters as `topic`: the note
+ * is prepended to the prompt, and `lib/llm.ts` rejects over-length input anyway.
+ */
+export const interjectSchema = z.strictObject({
+  content: z.string().trim().min(1, 'Interjection content is required.').max(10_000),
+})

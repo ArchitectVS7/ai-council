@@ -1,7 +1,8 @@
 import 'server-only'
 
 /**
- * Turn generation — advance, synthesize, retry-last (PRD §5.1, §5.3, §8).
+ * The session loop — advance, synthesize, retry-last, interject,
+ * regenerate-last, reopen (PRD §5.1, §5.3, §8).
  *
  * This is the only place the three pieces meet: the pure scheduler/prompt
  * builder in `lib/council/`, the provider in `lib/llm.ts`, and the writes in
@@ -16,6 +17,14 @@ import 'server-only'
  *
  * Snapshot rule (PRD §7): the roster comes from `session.councilSnapshot`.
  * Nothing here reads `councils` or `personas`.
+ *
+ * One invariant ties the six entry points together: **every generation requires
+ * an active session, and a failed turn is always the most recent turn.** That is
+ * why regenerate-last refuses a completed session (reopen it first — one call)
+ * rather than quietly reactivating it: a regeneration that failed on a completed
+ * session would leave a `failed` last turn that `retryLastTurn` then refuses with
+ * `not-active`, wedging the session. It is also why an interjection is refused
+ * while a failed turn is pending, even though an interjection generates nothing.
  */
 import type { RoundType } from '@/lib/council/prompt'
 import { buildTurnPrompt } from '@/lib/council/prompt'
@@ -27,6 +36,8 @@ import {
   findSessionWithTurns,
   insertTurn,
   markSessionCompleted,
+  reopenSession as reopenSessionRow,
+  touchSession,
   updateTurnInPlace,
 } from '@/lib/db/repo'
 import { generate, getModel } from '@/lib/llm'
@@ -35,8 +46,11 @@ import { CHAIR_PERSONA } from '@/lib/seed-data'
 import { withSessionLock } from './lock'
 
 /**
- * Why a generated turn was refused. Each value maps to exactly one status code
- * in `lib/api/http.ts`; the accompanying message is surfaced verbatim.
+ * Why a session action was refused. Each value maps to exactly one status code
+ * in `lib/api/http.ts`; the accompanying message is surfaced verbatim. The name
+ * predates reopen, which produces no turn but shares the same refusal
+ * vocabulary — renaming it would churn `lib/api/http.ts` and two suites for no
+ * behavioural gain.
  */
 export type TurnFailureReason =
   | 'invalid-session'
@@ -45,6 +59,8 @@ export type TurnFailureReason =
   | 'awaiting-retry'
   | 'nothing-to-retry'
   | 'nothing-to-synthesize'
+  | 'nothing-to-regenerate'
+  | 'not-completed'
   | 'cap-reached'
 
 export type TurnResult =
@@ -55,6 +71,15 @@ export type TurnResult =
       /** Set by `advanceSession`: the session has run every round its snapshot planned. */
       plannedRoundsComplete?: boolean
     }
+  | { ok: false; reason: TurnFailureReason; message: string }
+
+/**
+ * The result of an action that changes a session without writing a turn — only
+ * `reopenSession` today. Module-local until a caller names it (R2 / knip); the
+ * route infers it from the function's return type.
+ */
+type SessionActionResult =
+  | { ok: true; session: SessionRow }
   | { ok: false; reason: TurnFailureReason; message: string }
 
 /** The provider's result, already shaped for a `turns` row. */
@@ -107,6 +132,14 @@ async function loadSession(sessionId: string): Promise<LoadedSession | null> {
 
 function notFoundResult(sessionId: string): TurnResult {
   return { ok: false, reason: 'invalid-session', message: `Session ${sessionId} not found.` }
+}
+
+/** The highest-`seq` turn, or null on an empty transcript. */
+function latestTurn(turns: TurnRow[]): TurnRow | null {
+  return turns.reduce<TurnRow | null>(
+    (acc, turn) => (acc === null || turn.seq > acc.seq ? turn : acc),
+    null,
+  )
 }
 
 function messageOf(error: unknown): string {
@@ -255,20 +288,76 @@ export async function synthesizeSession(sessionId: string): Promise<TurnResult> 
 }
 
 /**
+ * Rewrite one already-persisted turn from a fresh provider call.
+ *
+ * Shared by retry-last (the turn failed) and regenerate-last (the turn is fine
+ * but the convener wants another take). Everything below the eligibility rules
+ * is identical, and duplicating it would let the two endpoints drift on the
+ * things that matter most: the slot never moves (`updateTurnInPlace` on the same
+ * row id, so `seq`, `kind`, `round` and `speaker_name` are untouched), the
+ * attempt counts toward the PRD §5.3 cap, and a successful synthesis re-seals
+ * the session.
+ */
+async function regenerateTurnInPlace(loaded: LoadedSession, last: TurnRow): Promise<TurnResult> {
+  const sessionId = loaded.session.id
+
+  let speaker: CouncilSnapshotMember
+  let kind: RoundType
+  if (last.kind === 'synthesis') {
+    speaker = CHAIR_PERSONA
+    kind = 'synthesis'
+  } else {
+    const member = loaded.state.snapshot.members.find((m) => m.name === last.speakerName)
+    if (!member) {
+      // Impossible under the snapshot rule: the speaker was read out of this
+      // same frozen roster when the turn was created. Fail loudly (R4) rather
+      // than substitute a different persona.
+      throw new Error(
+        `Turn ${last.seq} of session ${sessionId} names speaker "${last.speakerName}", ` +
+          'which is not in the session council snapshot.',
+      )
+    }
+    speaker = member
+    kind = last.round === 1 ? 'opening' : 'rebuttal'
+  }
+
+  // The turn being replaced is excluded from its own context. A failed turn is
+  // already dropped by the budgeter, so this changes nothing for retry; for a
+  // regeneration it stops the speaker being shown the very text it is being
+  // asked to replace. Dropping it also re-exposes any interjection that landed
+  // before it, which is exactly the note this new attempt must address.
+  const built = buildTurnPrompt({
+    topic: loaded.session.topic,
+    snapshot: loaded.state.snapshot,
+    turns: loaded.state.turns.filter((turn) => turn.seq !== last.seq),
+    speaker,
+    round: last.round,
+    kind,
+  })
+
+  // Another generation attempt, so it counts toward the cap (PRD §5.3).
+  const session = await bumpTurnCursor(sessionId)
+  const generated: TurnPatch = await runProvider(built)
+  const turn = await updateTurnInPlace(last.id, generated)
+
+  if (turn.kind !== 'synthesis' || generated.status !== 'complete') {
+    return { ok: true, turn, session }
+  }
+  return { ok: true, turn, session: await markSessionCompleted(sessionId) }
+}
+
+/**
  * Retry the latest turn, in place, when — and only when — it failed.
  *
- * Replacing a *complete* turn is regenerate-last (T-020), a different endpoint
- * with different rules, so it is refused here rather than quietly allowed.
+ * Replacing a *complete* turn is `regenerateLastTurn`, a different endpoint with
+ * different rules, so it is refused here rather than quietly allowed.
  */
 export async function retryLastTurn(sessionId: string): Promise<TurnResult> {
   const outcome = await withSessionLock(sessionId, async (): Promise<TurnResult> => {
     const loaded = await loadSession(sessionId)
     if (!loaded) return notFoundResult(sessionId)
 
-    const last = loaded.turns.reduce<TurnRow | null>(
-      (acc, turn) => (acc === null || turn.seq > acc.seq ? turn : acc),
-      null,
-    )
+    const last = latestTurn(loaded.turns)
     if (!last) {
       return {
         ok: false,
@@ -297,46 +386,145 @@ export async function retryLastTurn(sessionId: string): Promise<TurnResult> {
     const check = canGenerate(loaded.state)
     if (!check.ok && check.reason !== 'awaiting-retry') return refusal(check)
 
-    let speaker: CouncilSnapshotMember
-    let kind: RoundType
-    if (last.kind === 'synthesis') {
-      speaker = CHAIR_PERSONA
-      kind = 'synthesis'
-    } else {
-      const member = loaded.state.snapshot.members.find((m) => m.name === last.speakerName)
-      if (!member) {
-        // Impossible under the snapshot rule: the speaker was read out of this
-        // same frozen roster when the turn was created. Fail loudly (R4) rather
-        // than substitute a different persona.
-        throw new Error(
-          `Turn ${last.seq} of session ${sessionId} names speaker "${last.speakerName}", ` +
-            'which is not in the session council snapshot.',
-        )
+    return regenerateTurnInPlace(loaded, last)
+  })
+
+  return outcome.locked ? LOCKED : outcome.value
+}
+
+/**
+ * Record a convener-authored interjection (PRD §5.1, §5.2).
+ *
+ * It occupies a transcript slot but consumes no persona's turn — the scheduler
+ * counts only completed persona turns, so whoever was due to speak still is.
+ * The lock is taken so a note cannot be written into the `seq` an in-flight
+ * generation has already claimed.
+ */
+export async function addInterjection(sessionId: string, content: string): Promise<TurnResult> {
+  const outcome = await withSessionLock(sessionId, async (): Promise<TurnResult> => {
+    const loaded = await loadSession(sessionId)
+    if (!loaded) return notFoundResult(sessionId)
+
+    // Deliberately *not* `canGenerate`: an interjection generates nothing, so
+    // the 60-turn cap must never block one (PRD §5.3 caps generated turns). The
+    // two checks that do apply are hand-rolled for that reason.
+    if (loaded.session.status !== 'active') {
+      return {
+        ok: false,
+        reason: 'not-active',
+        message: `Session is ${loaded.session.status}; only active sessions can be interjected into.`,
       }
-      speaker = member
-      kind = last.round === 1 ? 'opening' : 'rebuttal'
     }
 
-    // The failed turn is excluded from the budgeted transcript by construction,
-    // so the retry never sees its own empty slot.
-    const built = buildTurnPrompt({
-      topic: loaded.session.topic,
-      snapshot: loaded.state.snapshot,
-      turns: loaded.state.turns,
-      speaker,
-      round: last.round,
-      kind,
+    // A failed turn must stay the most recent turn — the scheduler and
+    // retry-last both rely on it — so the note waits until it is repaired.
+    const last = latestTurn(loaded.turns)
+    if (last !== null && last.status === 'failed') {
+      return {
+        ok: false,
+        reason: 'awaiting-retry',
+        message: 'The most recent turn failed; retry it before adding an interjection.',
+      }
+    }
+
+    const turn = await insertTurn({
+      sessionId,
+      seq: nextTurnSeq(loaded.state.turns),
+      kind: 'interjection',
+      // The convener is not in the roster; `formatTurn` labels the turn.
+      speakerName: null,
+      round: currentRound(loaded.state),
+      content,
+      status: 'complete',
+      error: null,
+      model: null,
+      promptTokens: null,
+      completionTokens: null,
     })
 
-    // A retry is another generation attempt and counts toward the cap (PRD §5.3).
-    const session = await bumpTurnCursor(sessionId)
-    const generated: TurnPatch = await runProvider(built)
-    const turn = await updateTurnInPlace(last.id, generated)
+    // No `bumpTurnCursor`: nothing was generated. The session is still touched
+    // so the sessions list, which orders by `updated_at`, stays honest.
+    return { ok: true, turn, session: await touchSession(sessionId) }
+  })
 
-    if (turn.kind !== 'synthesis' || generated.status !== 'complete') {
-      return { ok: true, turn, session }
+  return outcome.locked ? LOCKED : outcome.value
+}
+
+/**
+ * Replace the latest *complete* persona or synthesis turn with a fresh
+ * generation, keeping its transcript slot (PRD §5.1).
+ *
+ * Only the latest turn may be regenerated, and the discarded text is not
+ * retained in v2. A completed session must be reopened first — see the
+ * module-level invariant.
+ */
+export async function regenerateLastTurn(sessionId: string): Promise<TurnResult> {
+  const outcome = await withSessionLock(sessionId, async (): Promise<TurnResult> => {
+    const loaded = await loadSession(sessionId)
+    if (!loaded) return notFoundResult(sessionId)
+
+    const last = latestTurn(loaded.turns)
+    if (!last) {
+      return {
+        ok: false,
+        reason: 'nothing-to-regenerate',
+        message: 'This session has no turns yet; there is nothing to regenerate.',
+      }
     }
-    return { ok: true, turn, session: await markSessionCompleted(sessionId) }
+    if (last.kind === 'interjection') {
+      return {
+        ok: false,
+        reason: 'nothing-to-regenerate',
+        message:
+          'The most recent turn is an interjection; it is convener-authored and was never generated.',
+      }
+    }
+    if (last.status !== 'complete') {
+      return {
+        ok: false,
+        reason: 'nothing-to-regenerate',
+        message: 'The most recent turn failed; retry it instead of regenerating it.',
+      }
+    }
+
+    // The full guard, with no exemption: the last turn is complete by
+    // construction, so `awaiting-retry` cannot fire, and both `not-active` and
+    // `cap-reached` stand. The scheduler's wording (which names the 60-turn cap)
+    // is passed through rather than restated here.
+    const check = canGenerate(loaded.state)
+    if (!check.ok) return refusal(check)
+
+    return regenerateTurnInPlace(loaded, last)
+  })
+
+  return outcome.locked ? LOCKED : outcome.value
+}
+
+/**
+ * Reopen a completed session (PRD §5.1's "iterate" mechanic).
+ *
+ * The prior synthesis stays in the transcript — a session may hold several, and
+ * the latest is the session's result. No turn is written and nothing is counted
+ * against the cap; the session simply becomes advanceable again, including past
+ * the round count its snapshot planned.
+ *
+ * Locked like the generating entry points so a reopen cannot land in the middle
+ * of the synthesis that is still sealing the session.
+ */
+export async function reopenSession(sessionId: string): Promise<SessionActionResult> {
+  const outcome = await withSessionLock(sessionId, async (): Promise<SessionActionResult> => {
+    const loaded = await loadSession(sessionId)
+    if (!loaded) return notFoundResult(sessionId)
+
+    if (loaded.session.status !== 'completed') {
+      return {
+        ok: false,
+        reason: 'not-completed',
+        message: `Session is ${loaded.session.status}; only a completed session can be reopened.`,
+      }
+    }
+
+    return { ok: true, session: await reopenSessionRow(sessionId) }
   })
 
   return outcome.locked ? LOCKED : outcome.value

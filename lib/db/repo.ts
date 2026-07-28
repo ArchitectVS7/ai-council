@@ -223,6 +223,46 @@ export async function bumpTurnCursor(sessionId: string): Promise<SessionRow> {
   return session
 }
 
+/**
+ * Mark activity on a session without counting a generation.
+ *
+ * An interjection is convener-authored, so it must not move `turn_cursor`
+ * (PRD §5.3 caps *generated* turns) — but it is activity, and the sessions list
+ * orders by `updated_at`.
+ */
+export async function touchSession(sessionId: string): Promise<SessionRow> {
+  const [session] = await getDb()
+    .update(sessions)
+    .set({ updatedAt: new Date() })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found; its activity time was not updated.`)
+  }
+  return session
+}
+
+/**
+ * Reopen a completed session (PRD §5.1's "iterate" mechanic).
+ *
+ * `completed_at` is cleared because the session is no longer completed; a later
+ * synthesis re-stamps it through `markSessionCompleted`. No turn is removed —
+ * the prior synthesis stays in the transcript.
+ */
+export async function reopenSession(sessionId: string): Promise<SessionRow> {
+  const [session] = await getDb()
+    .update(sessions)
+    .set({ status: 'active', completedAt: null, updatedAt: new Date() })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found; its status was not changed.`)
+  }
+  return session
+}
+
 /** Flip a session to `completed` once its synthesis lands (PRD §5.1). */
 export async function markSessionCompleted(sessionId: string): Promise<SessionRow> {
   const now = new Date()

@@ -9,12 +9,24 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ROUND_INSTRUCTIONS, SYNTHESIS_MAX_TOKENS } from '@/lib/council/prompt'
+import {
+  ADDRESS_INTERJECTION_INSTRUCTION,
+  CONVENER_NOTE_HEADING,
+  ROUND_INSTRUCTIONS,
+  SYNTHESIS_MAX_TOKENS,
+} from '@/lib/council/prompt'
 import type { CouncilSnapshot } from '@/lib/council/types'
 import { generate, type GenerateOptions } from '@/lib/llm'
 import { CHAIR_PERSONA, CHAIR_PERSONA_NAME } from '@/lib/seed-data'
 
-import { advanceSession, retryLastTurn, synthesizeSession } from './turns'
+import {
+  addInterjection,
+  advanceSession,
+  regenerateLastTurn,
+  reopenSession,
+  retryLastTurn,
+  synthesizeSession,
+} from './turns'
 
 type FakeSession = {
   id: string
@@ -86,6 +98,20 @@ vi.mock('@/lib/db/repo', () => ({
     session.status = 'completed'
     session.completedAt = new Date('2026-03-03T00:00:00Z')
     session.updatedAt = new Date('2026-03-03T00:00:00Z')
+    return { ...session }
+  },
+  touchSession: async (sessionId: string) => {
+    const session = db.sessions.get(sessionId)
+    if (!session) throw new Error(`Session ${sessionId} not found; its activity time was not updated.`)
+    session.updatedAt = new Date('2026-04-04T00:00:00Z')
+    return { ...session }
+  },
+  reopenSession: async (sessionId: string) => {
+    const session = db.sessions.get(sessionId)
+    if (!session) throw new Error(`Session ${sessionId} not found; its status was not changed.`)
+    session.status = 'active'
+    session.completedAt = null
+    session.updatedAt = new Date('2026-04-04T00:00:00Z')
     return { ...session }
   },
 }))
@@ -189,6 +215,17 @@ function expectOk(result: Awaited<ReturnType<typeof advanceSession>>) {
 
 function expectRefused(result: Awaited<ReturnType<typeof advanceSession>>) {
   if (result.ok) throw new Error(`expected a refusal, got turn ${result.turn.seq}`)
+  return result
+}
+
+/** Reopen writes no turn, so its result has no `turn` to narrow on. */
+function expectSessionOk(result: Awaited<ReturnType<typeof reopenSession>>) {
+  if (!result.ok) throw new Error(`expected success, got ${result.reason}: ${result.message}`)
+  return result
+}
+
+function expectSessionRefused(result: Awaited<ReturnType<typeof reopenSession>>) {
+  if (result.ok) throw new Error(`expected a refusal, got session ${result.session.status}`)
   return result
 }
 
@@ -551,5 +588,300 @@ describe('retryLastTurn', () => {
 
     openGate()
     expectOk(await inFlight)
+  })
+})
+
+const NOTE = 'Cost the migration in engineer-months before anyone argues about syntax.'
+
+describe('addInterjection', () => {
+  it('records a convener turn that consumes no persona slot and no cap slot', async () => {
+    const session = createSession()
+    expectOk(await advanceSession(session.id))
+    const cursorBefore = storedSession(session.id).turnCursor
+    const providerCallsBefore = vi.mocked(generate).mock.calls.length
+
+    const result = expectOk(await addInterjection(session.id, NOTE))
+
+    expect(result.turn).toMatchObject({
+      sessionId: session.id,
+      seq: 1,
+      kind: 'interjection',
+      speakerName: null,
+      round: 1,
+      content: NOTE,
+      status: 'complete',
+      error: null,
+      model: null,
+      promptTokens: null,
+      completionTokens: null,
+    })
+    // PRD §5.3 caps *generated* turns; a convener note generates nothing.
+    expect(storedSession(session.id).turnCursor).toBe(cursorBefore)
+    expect(vi.mocked(generate).mock.calls).toHaveLength(providerCallsBefore)
+    // …but it is activity, and the sessions list orders by it.
+    expect(result.session.updatedAt.getTime()).toBeGreaterThan(session.createdAt.getTime())
+  })
+
+  it('leaves the scheduler pointing at exactly the same speaker', async () => {
+    const withNote = createSession()
+    const withoutNote = createSession()
+    for (const id of [withNote.id, withoutNote.id]) expectOk(await advanceSession(id))
+
+    expectOk(await addInterjection(withNote.id, NOTE))
+
+    const noted = expectOk(await advanceSession(withNote.id)).turn
+    const plain = expectOk(await advanceSession(withoutNote.id)).turn
+
+    expect(noted.speakerName).toBe(plain.speakerName)
+    expect(noted.round).toBe(plain.round)
+    // Only the transcript slot differs: the note occupies one.
+    expect(noted.seq).toBe(plain.seq + 1)
+  })
+
+  it('makes the next speaker address the note, quoting its text', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    await addInterjection(session.id, NOTE)
+    await advanceSession(session.id)
+
+    // Call 0 was the opening; call 1 is the turn that follows the note.
+    const [options] = vi.mocked(generate).mock.calls[1]
+    expect(options.prompt).toContain(NOTE)
+    expect(options.prompt).toContain(CONVENER_NOTE_HEADING)
+    expect(options.prompt).toContain(ADDRESS_INTERJECTION_INSTRUCTION)
+  })
+
+  it('is allowed at the 60-turn cap — the cap counts generated turns only', async () => {
+    const session = createSession({ turnCursor: 60 })
+    addTurn(session.id, { seq: 0, kind: 'persona', speakerName: 'The Pragmatist', round: 1 })
+
+    const result = expectOk(await addInterjection(session.id, NOTE))
+
+    expect(result.turn).toMatchObject({ seq: 1, kind: 'interjection' })
+    expect(storedSession(session.id).turnCursor).toBe(60)
+    // Generation is still refused; only the note got through.
+    expect(expectRefused(await advanceSession(session.id)).reason).toBe('cap-reached')
+  })
+
+  it('refuses a completed or abandoned session, and an unknown id', async () => {
+    expect(expectRefused(await addInterjection(createSession({ status: 'completed' }).id, NOTE)).reason).toBe(
+      'not-active',
+    )
+    expect(expectRefused(await addInterjection(createSession({ status: 'abandoned' }).id, NOTE)).reason).toBe(
+      'not-active',
+    )
+    expect(
+      expectRefused(await addInterjection('00000000-0000-4000-8000-999999999996', NOTE)).reason,
+    ).toBe('invalid-session')
+  })
+
+  it('refuses while a failed turn is waiting to be retried', async () => {
+    const session = createSession()
+    provider.nextError = new Error('Anthropic request failed (529): overloaded')
+    await advanceSession(session.id)
+
+    const refused = expectRefused(await addInterjection(session.id, NOTE))
+
+    expect(refused.reason).toBe('awaiting-retry')
+    expect(refused.message).toMatch(/retry/i)
+    expect(storedTurns(session.id)).toHaveLength(1)
+  })
+})
+
+describe('regenerateLastTurn', () => {
+  it('replaces the latest complete persona turn in place and counts against the cap', async () => {
+    const session = createSession()
+    const original = { ...expectOk(await advanceSession(session.id)).turn }
+    vi.mocked(generate).mockResolvedValueOnce({
+      text: 'A sharper second take on the same question.',
+      promptTokens: 42,
+      completionTokens: 9,
+    })
+
+    const result = expectOk(await regenerateLastTurn(session.id))
+
+    expect(result.turn.id).toBe(original.id)
+    expect(result.turn.seq).toBe(original.seq)
+    expect(result.turn.kind).toBe('persona')
+    expect(result.turn.round).toBe(original.round)
+    expect(result.turn.speakerName).toBe(original.speakerName)
+    expect(result.turn.content).toBe('A sharper second take on the same question.')
+    expect(result.turn.content).not.toBe(original.content)
+    // No new row: the slot is reused, and the discarded text is not retained.
+    expect(storedTurns(session.id)).toHaveLength(1)
+    // PRD §5.3: regenerations count toward the 60-turn cap.
+    expect(storedSession(session.id).turnCursor).toBe(2)
+  })
+
+  it('does not show the speaker the text it is being asked to replace', async () => {
+    const session = createSession()
+    // Copied: the in-memory double rewrites the stored row in place, exactly as
+    // `updateTurnInPlace` does, so the original text has to be captured now.
+    const original = { ...expectOk(await advanceSession(session.id)).turn }
+    await regenerateLastTurn(session.id)
+
+    const [options] = vi.mocked(generate).mock.calls[1]
+    expect(options.prompt).not.toContain(original.content)
+    expect(options.prompt).toContain('No turns yet. You speak first.')
+  })
+
+  it('re-exposes an interjection that the replaced turn was meant to address', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    await addInterjection(session.id, NOTE)
+    await advanceSession(session.id)
+    await regenerateLastTurn(session.id)
+
+    const [options] = vi.mocked(generate).mock.calls[2]
+    expect(options.prompt).toContain(NOTE)
+    expect(options.prompt).toContain(ADDRESS_INTERJECTION_INSTRUCTION)
+  })
+
+  it('refuses when the latest turn failed — that is retry, not regenerate', async () => {
+    const session = createSession()
+    provider.nextError = new Error('OpenAI request failed (500): server error')
+    await advanceSession(session.id)
+
+    const refused = expectRefused(await regenerateLastTurn(session.id))
+
+    expect(refused.reason).toBe('nothing-to-regenerate')
+    expect(refused.message).toMatch(/retry/i)
+    expect(storedSession(session.id).turnCursor).toBe(1)
+  })
+
+  it('refuses when the latest turn is an interjection', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    await addInterjection(session.id, NOTE)
+
+    const refused = expectRefused(await regenerateLastTurn(session.id))
+
+    expect(refused.reason).toBe('nothing-to-regenerate')
+    expect(refused.message).toMatch(/interjection/i)
+  })
+
+  it('refuses when the session has no turns', async () => {
+    const refused = expectRefused(await regenerateLastTurn(createSession().id))
+
+    expect(refused.reason).toBe('nothing-to-regenerate')
+    expect(refused.message).toMatch(/no turns/i)
+  })
+
+  it('refuses a completed session, the cap, and an unknown id', async () => {
+    const completed = createSession({ status: 'completed', turnCursor: 3 })
+    addTurn(completed.id, { seq: 0, kind: 'synthesis', speakerName: CHAIR_PERSONA_NAME })
+    // Reopen first: a regeneration that failed on a completed session would leave
+    // a failed turn that retry-last then refuses as `not-active`.
+    expect(expectRefused(await regenerateLastTurn(completed.id)).reason).toBe('not-active')
+
+    const capped = createSession({ turnCursor: 60 })
+    addTurn(capped.id, { seq: 0, kind: 'persona', speakerName: 'The Pragmatist' })
+    expect(expectRefused(await regenerateLastTurn(capped.id)).reason).toBe('cap-reached')
+
+    expect(expectRefused(await regenerateLastTurn('00000000-0000-4000-8000-999999999995')).reason).toBe(
+      'invalid-session',
+    )
+  })
+
+  it('refuses a second concurrent regeneration with `locked`', async () => {
+    const session = createSession({ turnCursor: 1 })
+    addTurn(session.id, { seq: 0, kind: 'persona', speakerName: 'The Pragmatist' })
+    let openGate = (): void => {}
+    provider.gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+
+    const inFlight = regenerateLastTurn(session.id)
+    expect(expectRefused(await regenerateLastTurn(session.id)).reason).toBe('locked')
+
+    openGate()
+    expectOk(await inFlight)
+  })
+
+  it('regenerates a synthesis on a reopened session and re-seals it', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    await advanceSession(session.id)
+    const synthesis = expectOk(await synthesizeSession(session.id)).turn
+    expectSessionOk(await reopenSession(session.id))
+
+    const result = expectOk(await regenerateLastTurn(session.id))
+
+    expect(result.turn.id).toBe(synthesis.id)
+    expect(result.turn).toMatchObject({ seq: 2, kind: 'synthesis', speakerName: CHAIR_PERSONA_NAME })
+    expect(result.session.status).toBe('completed')
+    expect(storedSession(session.id).status).toBe('completed')
+    expect(storedTurns(session.id)).toHaveLength(3)
+  })
+
+  it('leaves a failed regeneration active for retry-last to repair', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    await advanceSession(session.id)
+    await synthesizeSession(session.id)
+    expectSessionOk(await reopenSession(session.id))
+
+    provider.nextError = new Error('Anthropic request failed (429): rate limit')
+    const failed = expectOk(await regenerateLastTurn(session.id))
+
+    expect(failed.turn).toMatchObject({ seq: 2, kind: 'synthesis', status: 'failed' })
+    expect(storedSession(session.id).status).toBe('active')
+
+    const retried = expectOk(await retryLastTurn(session.id))
+    expect(retried.turn).toMatchObject({ seq: 2, status: 'complete' })
+    expect(retried.session.status).toBe('completed')
+  })
+})
+
+describe('reopenSession', () => {
+  /** Four persona turns (both planned rounds) plus the Chair's synthesis. */
+  async function runToSynthesis() {
+    const session = createSession()
+    for (let i = 0; i < 4; i += 1) expectOk(await advanceSession(session.id))
+    expectOk(await synthesizeSession(session.id))
+    return session
+  }
+
+  it('flips a completed session back to active, keeping the synthesis in the transcript', async () => {
+    const session = await runToSynthesis()
+    expect(storedSession(session.id).status).toBe('completed')
+    const cursorBefore = storedSession(session.id).turnCursor
+
+    const result = expectSessionOk(await reopenSession(session.id))
+
+    expect(result.session.status).toBe('active')
+    expect(result.session.completedAt).toBeNull()
+    // Nothing was generated and nothing was removed.
+    expect(storedSession(session.id).turnCursor).toBe(cursorBefore)
+    expect(storedTurns(session.id).filter((t) => t.kind === 'synthesis')).toHaveLength(1)
+  })
+
+  it('lets the session advance again, past the rounds its snapshot planned', async () => {
+    const session = await runToSynthesis()
+    expectSessionOk(await reopenSession(session.id))
+
+    const next = expectOk(await advanceSession(session.id))
+
+    expect(next.turn).toMatchObject({ speakerName: 'The Pragmatist', round: 3, seq: 5 })
+    expect(next.plannedRoundsComplete).toBe(true)
+
+    // …and a second synthesis lands alongside the first, re-completing the session.
+    expectOk(await advanceSession(session.id))
+    const second = expectOk(await synthesizeSession(session.id))
+    expect(second.session.status).toBe('completed')
+    expect(storedTurns(session.id).filter((t) => t.kind === 'synthesis')).toHaveLength(2)
+  })
+
+  it('refuses an active or abandoned session, and an unknown id', async () => {
+    const active = expectSessionRefused(await reopenSession(createSession().id))
+    expect(active.reason).toBe('not-completed')
+    expect(active.message).toContain('active')
+
+    expect(expectSessionRefused(await reopenSession(createSession({ status: 'abandoned' }).id)).reason).toBe(
+      'not-completed',
+    )
+    expect(expectSessionRefused(await reopenSession('00000000-0000-4000-8000-999999999994')).reason).toBe(
+      'invalid-session',
+    )
   })
 })

@@ -111,6 +111,42 @@ describe('nextSpeaker', () => {
     expect(decision.seq).toBe(baseline.seq + 1)
   })
 
+  it('decides identically before and after an interjection, whatever the round', () => {
+    // T-020 acceptance: the scheduler is unaffected by interjections. Compared
+    // field by field rather than by "the same name", so a change to the round,
+    // the member index, the round type, or the round-start flag would fail here.
+    for (const spoken of [0, 1, 2, 3, 4, 5]) {
+      const turns = Array.from({ length: spoken }, (_, seq) => makeTurn({ seq }))
+      const before = expectOk(nextSpeaker(makeState({ turns, generatedTurns: spoken })))
+
+      const withNote = makeState({
+        turns: [
+          ...turns,
+          makeTurn({
+            seq: spoken,
+            kind: 'interjection',
+            speakerName: null,
+            content: 'focus on the migration cost',
+          }),
+        ],
+        generatedTurns: spoken,
+      })
+      const after = expectOk(nextSpeaker(withNote))
+
+      expect({ ...after, seq: after.seq - 1 }).toEqual(before)
+      // Spelled out, because this is the criterion the task names.
+      expect(after.speakerName).toBe(before.speakerName)
+      expect(after.memberIndex).toBe(before.memberIndex)
+      expect(after.round).toBe(before.round)
+      expect(after.roundType).toBe(before.roundType)
+      expect(after.atRoundStart).toBe(before.atRoundStart)
+      expect(after.plannedRoundsComplete).toBe(before.plannedRoundsComplete)
+      // Only the transcript slot moves.
+      expect(after.seq).toBe(before.seq + 1)
+      expect(currentRound(withNote)).toBe(currentRound(makeState({ turns })))
+    }
+  })
+
   it('does not let a synthesis consume a persona slot', () => {
     const turns = [0, 1, 2].map((seq) => makeTurn({ seq }))
     const baseline = expectOk(nextSpeaker(makeState({ turns })))

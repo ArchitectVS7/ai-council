@@ -46,8 +46,10 @@ export function conflict(message: string): Response {
  *
  * The 60-turn cap is a 422 rather than a 409 so the caller can tell "this
  * session is done growing" from the transient state conflicts above; both are
- * 4xx as PRD §5.3 requires. The `never` default makes a new refusal reason a
- * typecheck failure instead of a silent 500.
+ * 4xx as PRD §5.3 requires. `nothing-to-regenerate` and `not-completed` join the
+ * 409 group for the same reason as their neighbours: the request is well-formed
+ * and the transcript could satisfy it a moment later. The `never` default makes
+ * a new refusal reason a typecheck failure instead of a silent 500.
  */
 export function turnFailureResponse(failure: {
   reason: TurnFailureReason
@@ -63,6 +65,8 @@ export function turnFailureResponse(failure: {
     case 'awaiting-retry':
     case 'nothing-to-retry':
     case 'nothing-to-synthesize':
+    case 'nothing-to-regenerate':
+    case 'not-completed':
       return conflict(failure.message)
     default: {
       const exhaustive: never = failure.reason
