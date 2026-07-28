@@ -17,24 +17,9 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 
-/** One member of a council as frozen into `sessions.council_snapshot`. */
-export type CouncilSnapshotMember = {
-  name: string
-  role: string
-  charter: string
-  color: string
-}
-
-/**
- * The immutable copy of a council taken when a session is created. Sessions
- * render exclusively from this; `sessions.council_id` is provenance only and is
- * never joined for rendering (PRD §7).
- */
-export type CouncilSnapshot = {
-  name: string
-  rounds: number
-  members: CouncilSnapshotMember[]
-}
+// The snapshot shape lives in the pure domain layer; the dependency direction is
+// db → domain, never the reverse (`lib/council/` may not import `lib/db`).
+import type { CouncilSnapshot } from '@/lib/council/types'
 
 export const sessionStatus = pgEnum('session_status', ['active', 'completed', 'abandoned'])
 export const turnKind = pgEnum('turn_kind', ['persona', 'interjection', 'synthesis'])
