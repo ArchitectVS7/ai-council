@@ -9,6 +9,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { ProviderName } from '@/lib/models'
+
 import NewSessionForm from './new-session-form'
 
 const push = vi.hoisted(() => vi.fn())
@@ -57,10 +59,23 @@ function submitButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: 'Create session' }) as HTMLButtonElement
 }
 
+/** The provider is a server-supplied prop; anthropic unless a case says otherwise. */
+function renderForm(provider: ProviderName = 'anthropic') {
+  return render(<NewSessionForm provider={provider} />)
+}
+
 /** Renders and waits for the on-mount council read to settle. */
-async function renderLoaded() {
-  render(<NewSessionForm />)
+async function renderLoaded(provider: ProviderName = 'anthropic') {
+  renderForm(provider)
   await screen.findByLabelText('Council')
+}
+
+function modelSelect(): HTMLSelectElement {
+  return screen.getByLabelText('Model') as HTMLSelectElement
+}
+
+function optionValues(select: HTMLSelectElement): string[] {
+  return [...select.options].map((option) => option.value)
 }
 
 afterEach(() => {
@@ -99,7 +114,7 @@ describe('council picker', () => {
 
   it('surfaces a failed council read and refuses to offer a fabricated picker', async () => {
     stubFetch(async () => json({ error: 'DATABASE_URL is not set.' }, 500))
-    render(<NewSessionForm />)
+    renderForm()
 
     expect((await screen.findByRole('alert')).textContent).toBe('DATABASE_URL is not set.')
     expect(screen.queryByLabelText('Council')).toBeNull()
@@ -108,10 +123,65 @@ describe('council picker', () => {
 
   it('says so plainly when the library is empty instead of inventing a council', async () => {
     stubFetch(async () => json({ councils: [] }))
-    render(<NewSessionForm />)
+    renderForm()
 
     expect(await screen.findByText(/no councils are available/i)).toBeTruthy()
     expect(submitButton().disabled).toBe(true)
+  })
+})
+
+describe('model picker (PRD Amendment A1)', () => {
+  it("offers the anthropic list with 'Provider default' first", async () => {
+    stubHappyCouncils(() => json({}, 500))
+    await renderLoaded('anthropic')
+
+    expect(optionValues(modelSelect())).toEqual([
+      '',
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-haiku-4-5-20251001',
+    ])
+    expect(modelSelect().options[0].textContent).toBe('Provider default')
+    // Nothing is preselected but the default, so an untouched form sends no model.
+    expect(modelSelect().value).toBe('')
+  })
+
+  it('offers the openai list under the openai provider', async () => {
+    stubHappyCouncils(() => json({}, 500))
+    await renderLoaded('openai')
+
+    expect(optionValues(modelSelect())).toEqual(['', 'gpt-4o', 'gpt-4o-mini'])
+  })
+
+  it('is absent under the mock provider rather than shown and ignored', async () => {
+    stubHappyCouncils(() => json({}, 500))
+    await renderLoaded('mock')
+
+    expect(screen.queryByLabelText('Model')).toBeNull()
+  })
+
+  it("sends no model key at all when 'Provider default' is left selected", async () => {
+    const fetchSpy = stubHappyCouncils(() => json({ session: { id: SESSION_ID } }, 201))
+    await renderLoaded('anthropic')
+
+    fireEvent.change(topicField(), { target: { value: 'Should we ship on Friday?' } })
+    fireEvent.click(submitButton())
+
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    const body = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body)) as Record<string, unknown>
+    expect('model' in body).toBe(false)
+  })
+
+  it('sends the chosen model', async () => {
+    const fetchSpy = stubHappyCouncils(() => json({ session: { id: SESSION_ID } }, 201))
+    await renderLoaded('openai')
+
+    fireEvent.change(topicField(), { target: { value: 'Should we ship on Friday?' } })
+    fireEvent.change(modelSelect(), { target: { value: 'gpt-4o' } })
+    fireEvent.click(submitButton())
+
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body)).model).toBe('gpt-4o')
   })
 })
 

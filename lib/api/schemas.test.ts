@@ -84,6 +84,38 @@ describe('createSessionSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  it('accepts a model override and trims it (Amendment A1)', () => {
+    expect(
+      createSessionSchema.safeParse({ topic: 't', councilId: UUID, model: 'gpt-4o' }).success,
+    ).toBe(true)
+    const trimmed = createSessionSchema.safeParse({
+      topic: 't',
+      councilId: UUID,
+      model: '  gpt-4o  ',
+    })
+    expect(trimmed.success && trimmed.data.model).toBe('gpt-4o')
+  })
+
+  it('omits model entirely when it is not supplied, so the session follows the env default', () => {
+    const result = createSessionSchema.safeParse({ topic: 't', councilId: UUID })
+    expect(result.success).toBe(true)
+    expect(result.success && 'model' in result.data).toBe(false)
+  })
+
+  it.each([
+    ['empty model', { topic: 't', councilId: UUID, model: '' }],
+    ['whitespace-only model', { topic: 't', councilId: UUID, model: '   ' }],
+    ['oversized model', { topic: 't', councilId: UUID, model: 'x'.repeat(101) }],
+    ['non-string model', { topic: 't', councilId: UUID, model: 42 }],
+    ['null model', { topic: 't', councilId: UUID, model: null }],
+  ])('rejects %s', (_label, body) => {
+    const result = createSessionSchema.safeParse(body)
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error.issues.map((i) => i.path.join('.'))).toContain(
+      'model',
+    )
+  })
+
   it('rejects a non-object body', () => {
     expect(createSessionSchema.safeParse('nope').success).toBe(false)
     expect(createSessionSchema.safeParse(null).success).toBe(false)

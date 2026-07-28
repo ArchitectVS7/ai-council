@@ -285,6 +285,14 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
             <dt>Council:</dt>
             <dd className="font-medium text-slate-900">{snapshot.name}</dd>
           </div>
+          {/* The effective model (PRD Amendment A1): the session's own choice,
+              or the app default when it made none. */}
+          <div className="flex gap-1">
+            <dt>Model:</dt>
+            <dd className="font-medium text-slate-900" data-testid="session-model">
+              {view.session.model ?? view.defaultModel}
+            </dd>
+          </div>
           <div className="flex gap-1">
             <dt>Status:</dt>
             <dd className="font-medium text-slate-900">{view.session.status}</dd>

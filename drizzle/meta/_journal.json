@@ -8,6 +8,13 @@
       "when": 1785208046313,
       "tag": "0000_married_king_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785243292135,
+      "tag": "0001_plain_wolverine",
+      "breakpoints": true
     }
   ]
 }

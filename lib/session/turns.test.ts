@@ -32,6 +32,8 @@ type FakeSession = {
   id: string
   topic: string
   councilId: string | null
+  /** The per-session model override (PRD Amendment A1); null = the env default. */
+  model: string | null
   councilSnapshot: CouncilSnapshot
   status: 'active' | 'completed' | 'abandoned'
   turnCursor: number
@@ -128,14 +130,17 @@ vi.mock('@/lib/llm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/llm')>()
   return {
     ...actual,
-    generate: vi.fn(async (options: GenerateOptions) => {
+    // The second argument is the resolved model (PRD Amendment A1); it is
+    // forwarded rather than dropped so a test can assert what the provider was
+    // actually asked for.
+    generate: vi.fn(async (options: GenerateOptions, model?: string | null) => {
       if (provider.gate) await provider.gate
       if (provider.nextError) {
         const error = provider.nextError
         provider.nextError = null
         throw error
       }
-      return actual.generate(options)
+      return actual.generate(options, model)
     }),
   }
 })
@@ -169,6 +174,7 @@ function createSession(overrides: Partial<FakeSession> = {}): FakeSession {
     id,
     topic: 'Should we ship the beta this quarter?',
     councilId: null,
+    model: null,
     councilSnapshot: SNAPSHOT,
     status: 'active',
     turnCursor: 0,
@@ -371,6 +377,69 @@ describe('advanceSession', () => {
 
     // Still round 1, still the second member — but into the next transcript slot.
     expect(result.turn).toMatchObject({ speakerName: 'The Skeptic', round: 1, seq: 2 })
+  })
+})
+
+describe("the session's model reaches the provider (PRD Amendment A1)", () => {
+  /** The model the nth `generate` call was asked for. */
+  function modelOfCall(index: number): string | null | undefined {
+    return vi.mocked(generate).mock.calls[index][1]
+  }
+
+  it('sends the session model on advance and records it on the turn', async () => {
+    const session = createSession({ model: 'claude-opus-5' })
+
+    const result = expectOk(await advanceSession(session.id))
+
+    expect(modelOfCall(0)).toBe('claude-opus-5')
+    expect(result.turn.model).toBe('claude-opus-5')
+    expect(storedTurns(session.id)[0].model).toBe('claude-opus-5')
+  })
+
+  it('falls back to the env/provider default when the session set no model', async () => {
+    const session = createSession()
+
+    const result = expectOk(await advanceSession(session.id))
+
+    // `LLM_PROVIDER=mock` with a blank `LLM_MODEL` (see beforeEach).
+    expect(modelOfCall(0)).toBe('mock')
+    expect(result.turn.model).toBe('mock')
+  })
+
+  it('prefers the session model over LLM_MODEL — the session was created with it', async () => {
+    vi.stubEnv('LLM_MODEL', 'some-env-model')
+    const session = createSession({ model: 'claude-opus-5' })
+
+    expectOk(await advanceSession(session.id))
+
+    expect(modelOfCall(0)).toBe('claude-opus-5')
+  })
+
+  it('sends it on synthesize, retry-last, and regenerate-last too', async () => {
+    const session = createSession({ model: 'claude-opus-5' })
+
+    provider.nextError = new Error('Anthropic request failed (529): overloaded')
+    expectOk(await advanceSession(session.id))
+    const retried = expectOk(await retryLastTurn(session.id))
+    const regenerated = expectOk(await regenerateLastTurn(session.id))
+    const synthesized = expectOk(await synthesizeSession(session.id))
+
+    expect([modelOfCall(0), modelOfCall(1), modelOfCall(2), modelOfCall(3)]).toEqual([
+      'claude-opus-5',
+      'claude-opus-5',
+      'claude-opus-5',
+      'claude-opus-5',
+    ])
+    for (const turn of [retried, regenerated, synthesized]) {
+      expect(turn.turn.model).toBe('claude-opus-5')
+    }
+  })
+
+  it('surfaces a malformed stored model as a throw, not as a failed turn (R4)', async () => {
+    const session = createSession({ model: '   ' })
+
+    await expect(advanceSession(session.id)).rejects.toThrowError(/empty/i)
+    expect(storedTurns(session.id)).toHaveLength(0)
   })
 })
 

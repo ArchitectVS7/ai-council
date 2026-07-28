@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return badRequest('Invalid request body.', parsed.error.issues)
     }
-    const { topic, councilId, rounds } = parsed.data
+    const { topic, councilId, rounds, model } = parsed.data
 
     const council = await findCouncilWithMembers(councilId)
     if (!council) {
@@ -39,7 +39,9 @@ export async function POST(request: Request) {
       return unprocessable(result.message)
     }
 
-    const session = await insertSession({ topic, councilId, snapshot: result.snapshot })
+    // `model` is stored once, at creation (PRD Amendment A1). Every later turn
+    // reads it back from the row — the client never names a model again.
+    const session = await insertSession({ topic, councilId, model, snapshot: result.snapshot })
     return Response.json({ session }, { status: 201 })
   } catch (error) {
     return serverError(error)

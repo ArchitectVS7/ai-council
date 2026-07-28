@@ -38,11 +38,13 @@ function view(overrides: { status?: ChamberView['session']['status']; turnCursor
       topic: 'Should we ship on Friday?',
       status: overrides.status ?? 'active',
       turnCursor: overrides.turnCursor ?? 3,
+      model: null,
       createdAt: '2026-07-28T09:15:00.000Z',
       councilSnapshot: SNAPSHOT,
     },
     turns: overrides.turns ?? [turn({ seq: 0 })],
     mockMode: true,
+    defaultModel: 'mock',
   }
 }
 

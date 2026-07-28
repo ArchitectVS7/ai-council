@@ -14,16 +14,30 @@ import {
   MIN_COUNCIL_MEMBERS,
   MIN_ROUNDS,
 } from '@/lib/council/snapshot'
+import { MAX_MODEL_LENGTH } from '@/lib/models'
 
 /**
  * `POST /api/sessions`. Strict: an unknown key is a caller mistake and is
  * reported rather than ignored (R4). `rounds` is optional — when omitted the
  * council's own `default_rounds` applies (PRD §6, "rounds override").
+ *
+ * `model` is likewise optional (PRD Amendment A1): omitted means the session
+ * follows the app default from the environment. It is validated as a bounded,
+ * non-blank string rather than an enum of ids — the curated picker lists live
+ * in `lib/models.ts` for the form, but a model id is provider vocabulary that
+ * changes without a release, and pinning an enum here would turn a new model
+ * into a 400 the convener cannot work around.
  */
 export const createSessionSchema = z.strictObject({
   topic: z.string().trim().min(1, 'Topic is required.').max(10_000),
   councilId: z.uuid('councilId must be a UUID.'),
   rounds: z.number().int().min(MIN_ROUNDS).max(MAX_ROUNDS).optional(),
+  model: z
+    .string()
+    .trim()
+    .min(1, 'Model is required when supplied.')
+    .max(MAX_MODEL_LENGTH)
+    .optional(),
 })
 
 /** `GET /api/sessions/[id]` — validated before it reaches Postgres, so a bad id is a 400 rather than a cast error. */

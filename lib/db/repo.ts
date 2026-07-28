@@ -324,10 +324,14 @@ export async function replaceCouncilMembers(
  * Create a session. `councilId` is stored as provenance only (nullable FK); the
  * snapshot is what the session will be rendered from for the rest of its life.
  * `status`, `turn_cursor`, and the timestamps come from the column defaults.
+ *
+ * `model` is the convener's per-session override (PRD Amendment A1); null — the
+ * default — means every turn resolves the app default from the environment.
  */
 export async function insertSession(input: {
   topic: string
   councilId: string
+  model?: string | null
   snapshot: CouncilSnapshot
 }): Promise<SessionRow> {
   const [session] = await getDb()
@@ -335,6 +339,7 @@ export async function insertSession(input: {
     .values({
       topic: input.topic,
       councilId: input.councilId,
+      model: input.model ?? null,
       councilSnapshot: input.snapshot,
     })
     .returning()

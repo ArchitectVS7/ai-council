@@ -1,12 +1,15 @@
 'use client'
 
 /**
- * "New session" on `/` (PRD §6 screen 1): topic textarea, council picker, and a
- * rounds override that defaults to the chosen council's `default_rounds`.
+ * "New session" on `/` (PRD §6 screen 1): topic textarea, council picker, a
+ * rounds override that defaults to the chosen council's `default_rounds`, and a
+ * model picker (PRD Amendment A1).
  *
  * Server-authoritative (PRD §5.1): this form posts `{topic, councilId, rounds}`
- * to `POST /api/sessions` (PRD §8) and then navigates to whatever id the server
- * hands back. It never invents a session, a snapshot, or a status locally.
+ * plus an optional `model` to `POST /api/sessions` (PRD §8) and then navigates
+ * to whatever id the server hands back. It never invents a session, a snapshot,
+ * or a status locally. The model is the *only* thing it ever chooses, and only
+ * at creation: from then on the server reads it back off the session row.
  *
  * Fail loudly (R4): the council picker is fed by `GET /api/councils` and has no
  * hardcoded fallback — if that read fails, the error is shown and the form stays
@@ -19,8 +22,10 @@ import { useRouter } from 'next/navigation'
 import { describeFailure, messageOf, readErrorBody } from '@/lib/api/failure'
 import { MAX_ROUNDS, MIN_ROUNDS } from '@/lib/council/snapshot'
 import type { CouncilOption } from '@/lib/home/types'
+import { MODEL_CHOICES } from '@/lib/models'
+import type { ProviderName } from '@/lib/models'
 
-export default function NewSessionForm() {
+export default function NewSessionForm({ provider }: { provider: ProviderName }) {
   const router = useRouter()
   /** null until the council read settles — never an empty array standing in for "loading". */
   const [councils, setCouncils] = useState<CouncilOption[] | null>(null)
@@ -28,6 +33,8 @@ export default function NewSessionForm() {
   const [topic, setTopic] = useState('')
   /** Held as text so the field can be cleared; parsed and range-checked on submit. */
   const [rounds, setRounds] = useState('')
+  /** `''` is "Provider default" — it sends no `model` key at all. */
+  const [model, setModel] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -61,6 +68,9 @@ export default function NewSessionForm() {
   }, [])
 
   const selected = councils?.find((council) => council.id === councilId) ?? null
+  // Empty under `mock`: there is nothing to choose between, so the control is
+  // absent rather than shown and ignored.
+  const modelChoices = MODEL_CHOICES[provider]
 
   function onCouncilChange(nextId: string) {
     setCouncilId(nextId)
@@ -94,9 +104,15 @@ export default function NewSessionForm() {
       const response = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Exactly these three keys: `createSessionSchema` is a strict object and
-        // reports an unknown one as a 400.
-        body: JSON.stringify({ topic: trimmedTopic, councilId, rounds: parsedRounds }),
+        // Exactly these keys: `createSessionSchema` is a strict object and
+        // reports an unknown one as a 400. "Provider default" omits `model`
+        // entirely rather than sending a blank, which the schema rejects.
+        body: JSON.stringify({
+          topic: trimmedTopic,
+          councilId,
+          rounds: parsedRounds,
+          ...(model === '' ? {} : { model }),
+        }),
       })
 
       if (!response.ok) {
@@ -175,6 +191,27 @@ export default function NewSessionForm() {
             className="w-24 rounded border border-slate-300 p-2 text-sm"
           />
         </div>
+
+        {modelChoices.length === 0 ? null : (
+          <div className="flex flex-col gap-1">
+            <label htmlFor="model" className="text-sm font-medium text-slate-900">
+              Model
+            </label>
+            <select
+              id="model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              className="rounded border border-slate-300 p-2 text-sm"
+            >
+              <option value="">Provider default</option>
+              {modelChoices.map((choice) => (
+                <option key={choice} value={choice}>
+                  {choice}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {selected?.description == null ? null : (

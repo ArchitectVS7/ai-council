@@ -41,6 +41,7 @@ const store = vi.hoisted(() => {
     id: string
     topic: string
     councilId: string
+    model: string | null
     councilSnapshot: { name: string; rounds: number; members: unknown[] }
     status: string
     turnCursor: number
@@ -92,7 +93,11 @@ const store = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/lib/llm', () => ({ getProviderName: () => 'anthropic' }))
+vi.mock('@/lib/llm', () => ({
+  getProviderName: () => 'anthropic',
+  // `GET /api/sessions/[id]` also reports the app default model (Amendment A1).
+  getModel: () => 'claude-sonnet-5',
+}))
 
 vi.mock('@/lib/db/repo', () => {
   function persona(id: string) {
@@ -114,11 +119,17 @@ vi.mock('@/lib/db/repo', () => {
           }
         : null,
 
-    insertSession: async (input: { topic: string; councilId: string; snapshot: unknown }) => {
+    insertSession: async (input: {
+      topic: string
+      councilId: string
+      model?: string | null
+      snapshot: unknown
+    }) => {
       const session = {
         id: SESSION_ID,
         topic: input.topic,
         councilId: input.councilId,
+        model: input.model ?? null,
         councilSnapshot: input.snapshot as { name: string; rounds: number; members: unknown[] },
         status: 'active',
         turnCursor: 0,

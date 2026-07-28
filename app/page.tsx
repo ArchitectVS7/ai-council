@@ -14,6 +14,7 @@ import Link from 'next/link'
 import NewSessionForm from '@/components/new-session-form'
 import SessionList from '@/components/session-list'
 import { listSessions } from '@/lib/db/repo'
+import { getProviderName } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +39,10 @@ export default async function SessionsPage() {
         <h2 id="new-session" className="text-lg font-medium">
           New session
         </h2>
-        <NewSessionForm />
+        {/* The provider name is read on the server and handed down as a plain
+            string so the model picker can offer that provider's curated list
+            (PRD Amendment A1). No key material crosses the boundary. */}
+        <NewSessionForm provider={getProviderName()} />
       </section>
 
       <section aria-labelledby="sessions" className="flex flex-col gap-3">

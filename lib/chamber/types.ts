@@ -32,6 +32,12 @@ type ChamberSession = {
   /** Server-authoritative count of generation attempts, against the PRD §5.3 cap. */
   turnCursor: number
   /**
+   * The session's own model (PRD Amendment A1), chosen at creation and fixed
+   * for the session's life. Null means it follows the app default, which the
+   * payload carries as `defaultModel`.
+   */
+  model: string | null
+  /**
    * When the session was convened; carried for the Markdown export header.
    * `Date` on the server render, ISO string after a client refetch — see the
    * note at the top of this file.
@@ -49,4 +55,6 @@ export type ChamberView = {
   session: ChamberSession
   turns: ChamberTurn[]
   mockMode: boolean
+  /** The app default, used when the session set no model of its own. */
+  defaultModel: string
 }

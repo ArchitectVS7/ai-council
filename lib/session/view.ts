@@ -17,22 +17,36 @@ import 'server-only'
  */
 import { findSessionWithTurns } from '@/lib/db/repo'
 import type { SessionRow, TurnRow } from '@/lib/db/repo'
-import { getProviderName } from '@/lib/llm'
+import { getModel, getProviderName } from '@/lib/llm'
 
 export type SessionView = {
   session: SessionRow
   turns: TurnRow[]
   /** True only under `LLM_PROVIDER=mock` — the one place mock output is allowed (R4). */
   mockMode: boolean
+  /**
+   * The app default model, so the chamber can show the *effective* model of a
+   * session that set no override of its own (PRD Amendment A1). A resolved
+   * public model id and nothing else — no key material leaves the server.
+   *
+   * The provider *name* is deliberately not added here: the chamber's only
+   * provider-dependent behaviour is the mock badge, which `mockMode` already
+   * carries, and a field with no consumer is code without a caller (R2).
+   * The `/` form, which does need the name, reads it in its own server
+   * component by the same mechanism.
+   */
+  defaultModel: string
 }
 
-/** A session plus its transcript and the provider flag, or null when the id is unknown. */
+/** A session plus its transcript and the provider flags, or null when the id is unknown. */
 export async function loadSessionView(sessionId: string): Promise<SessionView | null> {
   const found = await findSessionWithTurns(sessionId)
   if (!found) return null
 
   // `getProviderName()` throws on an unreadable `LLM_PROVIDER`. That is operator
   // misconfiguration and must surface as a logged 500, not as a quietly
-  // un-badged page (R4), so it is deliberately not caught here.
-  return { ...found, mockMode: getProviderName() === 'mock' }
+  // un-badged page (R4), so it is deliberately not caught here. `getModel()` is
+  // called with no argument on purpose — this is the app default, not the
+  // session's override, which the chamber reads off the session row itself.
+  return { ...found, mockMode: getProviderName() === 'mock', defaultModel: getModel() }
 }

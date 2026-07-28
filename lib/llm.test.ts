@@ -11,8 +11,8 @@ import {
   parseOpenAIResponse,
   type GenerateOptions,
   type GenerateResult,
-  type ProviderName,
 } from './llm'
+import { MAX_MODEL_LENGTH, type ProviderName } from './models'
 
 const ENV_KEYS = ['LLM_PROVIDER', 'LLM_MODEL', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const
 
@@ -82,6 +82,83 @@ describe('getModel', () => {
     process.env.LLM_MODEL = ' claude-opus-5 '
     expect(getModel()).toBe('claude-opus-5')
   })
+
+  it('prefers an explicit override over LLM_MODEL and the provider default (A1)', () => {
+    process.env.LLM_MODEL = 'gpt-4o-mini'
+    expect(getModel('claude-opus-5')).toBe('claude-opus-5')
+    expect(getModel('  claude-opus-5  ')).toBe('claude-opus-5')
+  })
+
+  it('is idempotent, so the model recorded on a turn is the model that was sent', () => {
+    expect(getModel(getModel('claude-haiku-4-5-20251001'))).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('treats null and undefined as "no override" and falls back as before', () => {
+    expect(getModel(null)).toBe('claude-sonnet-5')
+    expect(getModel(undefined)).toBe('claude-sonnet-5')
+    process.env.LLM_MODEL = 'gpt-4o'
+    expect(getModel(null)).toBe('gpt-4o')
+  })
+
+  it('throws on a blank override instead of silently using the env default (R4)', () => {
+    process.env.LLM_MODEL = 'gpt-4o'
+    expect(() => getModel('')).toThrowError(/empty/i)
+    expect(() => getModel('   ')).toThrowError(/empty/i)
+  })
+
+  it('throws on an oversized override', () => {
+    expect(() => getModel('x'.repeat(MAX_MODEL_LENGTH + 1))).toThrowError(
+      new RegExp(String(MAX_MODEL_LENGTH)),
+    )
+    expect(getModel('x'.repeat(MAX_MODEL_LENGTH))).toHaveLength(MAX_MODEL_LENGTH)
+  })
+})
+
+describe('generate honours a per-call model override (Amendment A1)', () => {
+  /** Captures the request body a provider call would have sent. */
+  function stubAnthropic() {
+    const spy = vi.fn(async (_url: string, init: RequestInit) => {
+      void init
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [{ type: 'text', text: 'A measured opening.' }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+      } as unknown as Response
+    })
+    vi.stubGlobal('fetch', spy)
+    return spy
+  }
+
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'anthropic'
+    process.env.ANTHROPIC_API_KEY = 'sk-test'
+  })
+
+  it('sends the override as the request model', async () => {
+    const spy = stubAnthropic()
+    await generate(OPTIONS, 'claude-haiku-4-5-20251001')
+
+    const body = JSON.parse(String(spy.mock.calls[0][1].body)) as { model: string }
+    expect(body.model).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('sends the env default when no override is given', async () => {
+    process.env.LLM_MODEL = 'claude-sonnet-5'
+    const spy = stubAnthropic()
+    await generate(OPTIONS)
+
+    const body = JSON.parse(String(spy.mock.calls[0][1].body)) as { model: string }
+    expect(body.model).toBe('claude-sonnet-5')
+  })
+
+  it('refuses a malformed override before reaching the provider', async () => {
+    const spy = stubAnthropic()
+    await expect(generate(OPTIONS, '   ')).rejects.toThrowError(/empty/i)
+    expect(spy).not.toHaveBeenCalled()
+  })
 })
 
 describe('mock provider determinism', () => {
@@ -116,6 +193,12 @@ describe('mock provider determinism', () => {
   it('never reaches the network', async () => {
     await generate(OPTIONS)
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('ignores a model override — mock output is a function of the prompt alone', async () => {
+    const plain = await generate(OPTIONS)
+    const overridden = await generate(OPTIONS, 'claude-opus-5')
+    expect(overridden).toEqual(plain)
   })
 })
 

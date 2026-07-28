@@ -154,18 +154,27 @@ function messageOf(error: unknown): string {
  * button. This is not a silent fallback (R4) — nothing is retried here, no
  * substitute text is invented, and the verbatim provider message is stored and
  * returned. `getModel()` is called outside the try on purpose: an unreadable
- * `LLM_PROVIDER` is operator misconfiguration, not a turn failure, and must
- * surface as a 500 rather than be recorded against a persona.
+ * `LLM_PROVIDER` — or a malformed stored model — is operator misconfiguration,
+ * not a turn failure, and must surface as a 500 rather than be recorded against
+ * a persona.
+ *
+ * `sessionModel` is the session's own override (PRD Amendment A1), read from
+ * the persisted row; null means the app default from the environment. Because
+ * `getModel` is idempotent on an already-resolved id, the model recorded on the
+ * turn is byte-identical to the one the provider was asked for.
  */
-async function runProvider(built: {
-  system: string
-  prompt: string
-  maxTokens: number
-  temperature: number
-}): Promise<GeneratedFields> {
-  const model = getModel()
+async function runProvider(
+  built: {
+    system: string
+    prompt: string
+    maxTokens: number
+    temperature: number
+  },
+  sessionModel: string | null,
+): Promise<GeneratedFields> {
+  const model = getModel(sessionModel)
   try {
-    const result = await generate(built)
+    const result = await generate(built, model)
     return {
       content: result.text,
       status: 'complete',
@@ -215,7 +224,7 @@ export async function advanceSession(sessionId: string): Promise<TurnResult> {
     // means a crash between them can only under-count the transcript, never let
     // a session slip past the 60-turn cap.
     const session = await bumpTurnCursor(sessionId)
-    const generated = await runProvider(built)
+    const generated = await runProvider(built, loaded.session.model)
     const turn = await insertTurn({
       sessionId,
       seq: decision.seq,
@@ -267,7 +276,7 @@ export async function synthesizeSession(sessionId: string): Promise<TurnResult> 
     })
 
     const session = await bumpTurnCursor(sessionId)
-    const generated = await runProvider(built)
+    const generated = await runProvider(built, loaded.session.model)
     const turn = await insertTurn({
       sessionId,
       seq: nextTurnSeq(loaded.state.turns),
@@ -337,7 +346,7 @@ async function regenerateTurnInPlace(loaded: LoadedSession, last: TurnRow): Prom
 
   // Another generation attempt, so it counts toward the cap (PRD §5.3).
   const session = await bumpTurnCursor(sessionId)
-  const generated: TurnPatch = await runProvider(built)
+  const generated: TurnPatch = await runProvider(built, loaded.session.model)
   const turn = await updateTurnInPlace(last.id, generated)
 
   if (turn.kind !== 'synthesis' || generated.status !== 'complete') {

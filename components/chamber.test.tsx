@@ -34,6 +34,7 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
       topic: 'Should we ship on Friday?',
       status: 'active',
       turnCursor: 3,
+      model: null,
       createdAt: CREATED_AT,
       councilSnapshot: SNAPSHOT,
     },
@@ -70,6 +71,7 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
       },
     ],
     mockMode: true,
+    defaultModel: 'claude-sonnet-5',
     ...overrides,
   }
 }
@@ -173,6 +175,22 @@ describe('chamber header', () => {
     render(<Chamber initialView={fixture({ mockMode: false })} />)
 
     expect(screen.queryByText(/mock mode/i)).toBeNull()
+  })
+
+  it("shows the session's own model when it set one (PRD Amendment A1)", () => {
+    const view = fixture()
+    view.session.model = 'claude-opus-5'
+    render(<Chamber initialView={view} />)
+
+    expect(screen.getByTestId('session-model').textContent).toBe('claude-opus-5')
+  })
+
+  it('falls back to the app default the payload carries when the session set none', () => {
+    const view = fixture({ defaultModel: 'gpt-4o-mini' })
+    view.session.model = null
+    render(<Chamber initialView={view} />)
+
+    expect(screen.getByTestId('session-model').textContent).toBe('gpt-4o-mini')
   })
 })
 

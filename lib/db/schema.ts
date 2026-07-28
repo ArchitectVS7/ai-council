@@ -65,6 +65,8 @@ export const sessions = pgTable('sessions', {
   topic: text('topic').notNull(),
   /** Provenance pointer only — nullable, never joined for rendering (PRD §7). */
   councilId: uuid('council_id').references(() => councils.id, { onDelete: 'set null' }),
+  /** Per-session model override (PRD Amendment A1); null means the env default. */
+  model: text('model'),
   councilSnapshot: jsonb('council_snapshot').$type<CouncilSnapshot>().notNull(),
   status: sessionStatus('status').notNull().default('active'),
   /**
