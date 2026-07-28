@@ -4,6 +4,7 @@
 **Supersedes:** `01-PRD-As-Built.md` (retained as historical record only)
 **Date:** 2026-07-27
 **Amendments:** A1 (2026-07-28, convener directive at the T-016 gate) — per-session model selection: `sessions` gains a nullable `model` column, the new-session form gains a model picker (curated per-provider list, default = env `LLM_MODEL`), and the Chamber shows the effective model. Per-persona overrides remain deferred (§13).
+A2 (2026-07-28, convener decision after the M1 gate) — **privacy/local-first positioning**: a `local` LLM provider (OpenAI-compatible base URL — Ollama/LM Studio/vLLM; no API key) joins the provider set, `LLM_BASE_URL` joins the env-var set (now six), §4.1 states the product's reason to exist, §11 gains the sufficiency kill-test, and the fully-private deployment path (local model + local Postgres) is documented. Implemented by task T-030b.
 
 ---
 
@@ -55,6 +56,16 @@ Single user (the repo owner), no auth, no multi-tenancy. Representative uses:
 - **Decision stress-testing** — "Should I rewrite this service in Rust?" argued by a pragmatist, a performance zealot, and a maintenance skeptic.
 - **Creative iteration** — a game concept pushed through a narrative designer, a market cynic, and a systems designer, refined across rounds via interjections.
 - **Document/plan review** — paste a plan as the topic; council critiques it from assigned angles.
+
+### 4.1 Why not just prompt Claude? (A2)
+
+Honest positioning against the obvious substitute — in 2026 the user can already run multi-persona conversations in a chat window, or spawn parallel blind subagents in Claude Code and weigh their independent agreement. What justifies a purpose-built app:
+
+1. **Privacy — the anchor use case.** Some of the convener's work cannot touch a cloud model. Council on a `local` provider (Ollama/LM Studio/vLLM) plus local Postgres runs entirely on-machine: prompts, transcripts, and persona charters never leave it. Where cloud models are banned, "just prompt Claude" is not an option — this is the differentiator with no substitute, and it takes marginal cost off the table too.
+2. **The convener loop.** Interject mid-round, regenerate a weak turn, reopen after synthesis — live, steerable deliberation. Subagent orchestration is batch-shaped (fan out → wait → synthesis); Council is a seminar you sit in.
+3. **Repeatability + UI.** Saved personas/councils and persistent, exportable sessions replace a retyped prompt ritual, in an interface usable outside a terminal.
+
+Equally honest about when *not* to use it: one-shot cheap questions (chat wins on friction) and parallel research/review fan-outs over code or documents (Claude Code wins). Context isolation per persona is table stakes, not the pitch — blind parallel subagents achieve it too.
 
 ---
 
@@ -163,7 +174,7 @@ CRUD   /api/personas, /api/councils       standard; DELETE archives when referen
 ```
 
 - All request bodies validated with zod; salvage v1's validation/sanitization approach from `app/api/complete/route.ts`.
-- LLM access lives in one server module `lib/llm.ts` with a provider interface: `anthropic` (default), `openai`, `mock`. Selected by env. Keys never reach the client; there is no key-entry UI.
+- LLM access lives in one server module `lib/llm.ts` with a provider interface: `anthropic` (default), `openai`, `local` (OpenAI-compatible endpoint at `LLM_BASE_URL`, no key — A2), `mock`. Selected by env. Keys never reach the client; there is no key-entry UI.
 - Rate limiting: simple per-IP in-memory limiter (single-user app; no KV dependency).
 
 ---
@@ -173,8 +184,8 @@ CRUD   /api/personas, /api/councils       standard; DELETE archives when referen
 | Decision | Choice | Rationale |
 |---|---|---|
 | Framework | Next.js (App Router) + TypeScript + Tailwind | Known stack, serverless-friendly, keep what worked |
-| DB | Neon Postgres + Drizzle | Already provisioned in v1; schema is 5 tables |
-| LLM | Anthropic default (`claude-sonnet-5`), OpenAI selectable via env | Provider interface is ~50 lines, not a framework |
+| DB | Neon Postgres + Drizzle; plain Postgres throughout, so a **local Postgres** `DATABASE_URL` gives the fully-private deployment (A2) | Already provisioned in v1; schema is 5 tables |
+| LLM | Anthropic default (`claude-sonnet-5`), OpenAI or a **local OpenAI-compatible server** (Ollama/LM Studio/vLLM via `LLM_BASE_URL`, A2) selectable via env | Provider interface is ~50 lines, not a framework |
 | Streaming | **Not in MVP** — request/response per turn; SSE streaming is Milestone 3's first item | Ship the loop first |
 | State | Server-authoritative session state; client is a renderer + button panel | Kills v1's client-side orchestration drift |
 | Dependencies | Target < 15 production deps | Delete: puppeteer, docx, googleapis, @slack/web-api, @microsoft/microsoft-graph-client, reactflow, @xyflow/react, react-dnd, @vercel/kv, marked |
@@ -214,6 +225,7 @@ Nothing beyond Milestone 3 is committed. Post-M3 planning happens with the produ
 - `knip` reports **zero** unused exports/files; CI green on `main` continuously.
 - p95 non-streaming turn latency < 10s with default model; failures always surface with retry.
 - Subjective quality bar (the one that matters): in a 2-round session, every Round-2 turn references another persona's argument by name. If prompting can't reliably achieve this, fixing it outranks any milestone work.
+- **Sufficiency kill-test (A2):** the bar is not "beats one-shot Claude" — it is "the deliberation loop is good enough on small/local models to be useful where cloud models are banned." Concretely: a 2-round + synthesis session on a small model (Haiku as proxy until T-030b; then a local model) yields a synthesis the convener judges decision-useful, with the engage-by-name bar holding. If small-model sessions can't clear this after prompt iteration, halt feature work and reassess before M3 completes.
 
 ---
 
@@ -234,7 +246,7 @@ Cut, with the v1 corpse each rule buries:
 
 ## 13. Deferred (Genuinely Interesting, Zero Obligation)
 
-Per-persona model/temperature overrides; LLM-summarized transcript compression for very long sessions; parallel "simultaneous openings" in Round 1; council presets shareable as JSON gists; a lightweight "who's winning" reaction from the Chair between rounds. None of these may be started before M3 ships and this PRD is amended.
+Per-persona model/temperature overrides; LLM-summarized transcript compression for very long sessions; parallel "simultaneous openings" in Round 1; council presets shareable as JSON gists; a lightweight "who's winning" reaction from the Chair between rounds; **auto-convener mode (A2 candidate)** — the Chair critiques between rounds and issues the next round's steering directive itself ("attack the weakest assumption", "hybridize the Visionary's and Economist's positions"), reusing the interjection machinery, one level deep only; **hybrid-synthesis prompt variant** ("produce a best-of-both position, not a compromise"). The A2 candidates are gated on the §11 sufficiency kill-test passing. None of these may be started before M3 ships and this PRD is amended.
 
 ---
 
