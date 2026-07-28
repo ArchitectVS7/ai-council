@@ -38,6 +38,7 @@ function countOccurrences(haystack: string, needle: RegExp): number {
 describe('lib/council purity', () => {
   it('scans every non-test module in the directory', () => {
     expect(SOURCE_FILES).toEqual([
+      'export-md.ts',
       'prompt.ts',
       'scheduler.ts',
       'snapshot.ts',

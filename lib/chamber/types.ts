@@ -32,6 +32,12 @@ type ChamberSession = {
   /** Server-authoritative count of generation attempts, against the PRD §5.3 cap. */
   turnCursor: number
   /**
+   * When the session was convened; carried for the Markdown export header.
+   * `Date` on the server render, ISO string after a client refetch — see the
+   * note at the top of this file.
+   */
+  createdAt: string | Date
+  /**
    * Snapshot rule (PRD §7): the council is rendered from this frozen copy alone.
    * `councilId` is provenance and is deliberately absent from this type so the
    * chamber cannot be tempted to resolve it.

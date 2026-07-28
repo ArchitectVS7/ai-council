@@ -5,8 +5,8 @@
  *
  * Every control here is wired to a real endpoint; nothing is rendered that does
  * nothing. Controls the PRD lists but that later tasks own — Interject,
- * Regenerate last, Reopen (T-020/T-021), Export Markdown (T-015) — are simply
- * absent rather than shown disabled.
+ * Regenerate last, Reopen (T-020/T-021) — are simply absent rather than shown
+ * disabled.
  *
  * Server-authoritative (PRD §5.1): every mutation is a bodiless POST followed by
  * a refetch of `GET /api/sessions/[id]` that replaces the view wholesale. The
@@ -21,6 +21,7 @@ import { useCallback, useRef, useState } from 'react'
 import { atRoundBoundary, runRound } from '@/lib/chamber/runner'
 import type { RunRoundResult, StepOutcome } from '@/lib/chamber/runner'
 import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
+import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 import { MAX_GENERATED_TURNS } from '@/lib/council/scheduler'
 
 /** The three bodiless POST endpoints this screen drives (PRD §8). */
@@ -51,6 +52,8 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
   /** True only for the duration of a Run round. */
   const [running, setRunning] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  /** Success confirmation for Copy Markdown; the amber notice box is for failures only. */
+  const [copied, setCopied] = useState(false)
   // A ref, not state: the running loop has to read the latest value between
   // steps, and a re-render is not what makes Pause take effect.
   const pauseRef = useRef(false)
@@ -100,6 +103,7 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     async (action: Action) => {
       setBusy(true)
       setNotice(null)
+      setCopied(false)
       try {
         const outcome = await post(action)
         if (outcome.kind === 'refused') setNotice(outcome.message)
@@ -117,6 +121,7 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     setBusy(true)
     setRunning(true)
     setNotice(null)
+    setCopied(false)
     try {
       const result = await runRound({
         step: () => post('advance'),
@@ -136,6 +141,56 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
   const onPause = useCallback(() => {
     pauseRef.current = true
   }, [])
+
+  /** The single source of the exported document; both buttons go through it. */
+  const buildMarkdown = useCallback(
+    () =>
+      exportSessionMarkdown({
+        topic: view.session.topic,
+        snapshot,
+        createdAt: view.session.createdAt,
+        turns: view.turns,
+      }),
+    [view, snapshot],
+  )
+
+  const onCopyMarkdown = useCallback(async () => {
+    setNotice(null)
+    setCopied(false)
+    try {
+      if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+        // R4: no hidden-textarea fallback pretending the copy worked.
+        throw new Error('This browser did not grant clipboard access. Use Download .md instead.')
+      }
+      await navigator.clipboard.writeText(buildMarkdown())
+      setCopied(true)
+    } catch (error) {
+      setNotice(messageOf(error))
+    }
+  }, [buildMarkdown])
+
+  const onDownloadMarkdown = useCallback(() => {
+    setNotice(null)
+    setCopied(false)
+    let url: string | null = null
+    try {
+      const blob = new Blob([buildMarkdown()], { type: 'text/markdown' })
+      url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = markdownFilename({
+        topic: view.session.topic,
+        createdAt: view.session.createdAt,
+      })
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    } catch (error) {
+      setNotice(messageOf(error))
+    } finally {
+      if (url !== null) URL.revokeObjectURL(url)
+    }
+  }, [buildMarkdown, view.session.topic, view.session.createdAt])
 
   const atCap = view.session.turnCursor >= MAX_GENERATED_TURNS
   // Mirrors the server's `canGenerate` guard so the UI refuses exactly what the
@@ -209,6 +264,26 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
         >
           Synthesize
         </button>
+      </section>
+
+      {/* Export never generates, so it is live even when the session is
+          completed or at the turn cap. */}
+      <section aria-label="Export" className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="rounded border border-slate-300 px-3 py-2 text-sm font-medium"
+          onClick={() => void onCopyMarkdown()}
+        >
+          Copy Markdown
+        </button>
+        <button
+          type="button"
+          className="rounded border border-slate-300 px-3 py-2 text-sm font-medium"
+          onClick={onDownloadMarkdown}
+        >
+          Download .md
+        </button>
+        {copied ? <span className="text-sm text-slate-600">Copied to the clipboard.</span> : null}
       </section>
 
       {notice === null ? null : (

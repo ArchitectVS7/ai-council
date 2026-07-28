@@ -6,14 +6,16 @@
  * nothing here needs a database, a provider, or a network.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChamberView } from '@/lib/chamber/types'
+import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 
 import Chamber from './chamber'
 
 const SESSION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301'
 const PROVIDER_ERROR = 'Anthropic request failed (529): overloaded_error'
+const CREATED_AT = '2026-07-28T09:15:00.000Z'
 
 const SNAPSHOT = {
   name: 'Decision Panel',
@@ -32,6 +34,7 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
       topic: 'Should we ship on Friday?',
       status: 'active',
       turnCursor: 3,
+      createdAt: CREATED_AT,
       councilSnapshot: SNAPSHOT,
     },
     turns: [
@@ -271,5 +274,109 @@ describe('chamber controls', () => {
     expect(screen.getByTestId('turn-counter').textContent).toBe('60 / 60')
     expect(button('Step').disabled).toBe(true)
     expect(button('Synthesize').disabled).toBe(true)
+  })
+})
+
+describe('chamber export', () => {
+  /** What the serializer produces for the fixture — the byte-for-byte expectation. */
+  function expectedMarkdown(): string {
+    const view = fixture()
+    return exportSessionMarkdown({
+      topic: view.session.topic,
+      snapshot: view.session.councilSnapshot,
+      createdAt: view.session.createdAt,
+      turns: view.turns,
+    })
+  }
+
+  let writeText: ReturnType<typeof vi.fn>
+  let createObjectURL: ReturnType<typeof vi.fn>
+  let revokeObjectURL: ReturnType<typeof vi.fn>
+  let downloads: string[]
+
+  /** jsdom's Blob has no `text()`, so read it the way a browser used to. */
+  function readBlob(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(blob)
+    })
+  }
+
+  beforeEach(() => {
+    writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+
+    // jsdom does not implement the object-URL pair, so these are defined rather
+    // than spied.
+    createObjectURL = vi.fn(() => 'blob:mock-url')
+    revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true })
+
+    downloads = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloads.push(this.download)
+    })
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard')
+    Reflect.deleteProperty(URL, 'createObjectURL')
+    Reflect.deleteProperty(URL, 'revokeObjectURL')
+    vi.restoreAllMocks()
+  })
+
+  it('renders both export buttons, live even on a completed session', () => {
+    const view = fixture()
+    render(<Chamber initialView={{ ...view, session: { ...view.session, status: 'completed' } }} />)
+
+    expect(button('Copy Markdown').disabled).toBe(false)
+    expect(button('Download .md').disabled).toBe(false)
+  })
+
+  it('copies exactly what the serializer produces and confirms it', async () => {
+    const fetchSpy = stubFetch(async () => json(fixture()))
+    render(<Chamber initialView={fixture()} />)
+
+    fireEvent.click(button('Copy Markdown'))
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    expect(writeText.mock.calls[0][0]).toBe(expectedMarkdown())
+    expect(await screen.findByText('Copied to the clipboard.')).toBeTruthy()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('downloads a text/markdown blob of the same serializer output', async () => {
+    const fetchSpy = stubFetch(async () => json(fixture()))
+    render(<Chamber initialView={fixture()} />)
+
+    fireEvent.click(button('Download .md'))
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    expect(blob.type).toBe('text/markdown')
+    expect(await readBlob(blob)).toBe(expectedMarkdown())
+
+    const view = fixture()
+    expect(downloads).toEqual([
+      markdownFilename({ topic: view.session.topic, createdAt: view.session.createdAt }),
+    ])
+    expect(downloads[0].endsWith('.md')).toBe(true)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a clipboard failure instead of claiming success', async () => {
+    writeText.mockRejectedValue(new Error('Clipboard write denied'))
+    render(<Chamber initialView={fixture()} />)
+
+    fireEvent.click(button('Copy Markdown'))
+
+    expect((await screen.findByRole('alert')).textContent).toBe('Clipboard write denied')
+    expect(screen.queryByText('Copied to the clipboard.')).toBeNull()
   })
 })
