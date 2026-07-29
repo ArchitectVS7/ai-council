@@ -139,6 +139,12 @@ export function toSessionDocument(source: SessionDocumentSource): SessionDocumen
       councilSnapshot: {
         name: snapshot.name,
         rounds: snapshot.rounds,
+        // A3: normalising null and blank to *omitted* keeps the exporter's key
+        // order and the schema's in lockstep, and keeps a directive-less
+        // document byte-identical to a pre-A3 one.
+        ...(typeof snapshot.directive === 'string' && snapshot.directive.trim().length > 0
+          ? { directive: snapshot.directive }
+          : {}),
         members: snapshot.members.map((member) => ({
           name: member.name,
           role: member.role,

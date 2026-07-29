@@ -22,6 +22,14 @@ export type CouncilSnapshotMember = {
 export type CouncilSnapshot = {
   name: string
   rounds: number
+  /**
+   * Council-level instruction fed to every member, the Chair included, on every
+   * turn (PRD Amendment A3). Absent on every snapshot frozen before A3 shipped,
+   * and absent whenever the council has none — both behave as "no directive".
+   * Typed tolerantly on read so an old row carrying an explicit `null` still
+   * fits; `buildCouncilSnapshot` only ever emits the key or omits it.
+   */
+  directive?: string | null
   members: CouncilSnapshotMember[]
 }
 

@@ -54,7 +54,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (!parsed.success) {
       return badRequest('Invalid request body.', parsed.error.issues)
     }
-    const { name, description, defaultRounds, members } = parsed.data
+    const { name, description, directive, defaultRounds, members } = parsed.data
 
     const known = await findPersonasByIds(members.map((member) => member.personaId))
     const unknown = findUnknownPersonaId(
@@ -65,7 +65,12 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       return badRequest(`Persona ${unknown} is not in the library; it cannot be seated.`)
     }
 
-    const updated = await updateCouncil(parsedId.data, { name, description, defaultRounds })
+    const updated = await updateCouncil(parsedId.data, {
+      name,
+      description,
+      directive,
+      defaultRounds,
+    })
     if (!updated) {
       return notFound(`Council ${parsedId.data} not found.`)
     }

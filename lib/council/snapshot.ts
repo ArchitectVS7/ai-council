@@ -18,6 +18,15 @@ export const MAX_COUNCIL_MEMBERS = 8
 export const MIN_ROUNDS = 1
 export const MAX_ROUNDS = 5
 
+/**
+ * PRD Amendment A3: the council directive is fed to every member on every turn,
+ * so it is bounded well below the transcript budget. Owned here beside the other
+ * council bounds; `lib/api/schemas.ts` and `lib/transfer/schema.ts` import it
+ * rather than restating it, so the write boundary and the import boundary cannot
+ * disagree about how long a legal directive is.
+ */
+export const MAX_DIRECTIVE_LENGTH = 2_000
+
 /** One `council_members` row joined to its persona, as read from the database. */
 export type SnapshotSourceMember = {
   name: string
@@ -32,6 +41,8 @@ export type SnapshotSourceMember = {
 export type SnapshotSource = {
   name: string
   defaultRounds: number
+  /** `councils.directive` (PRD Amendment A3); null when the council has none. */
+  directive: string | null
   members: SnapshotSourceMember[]
 }
 
@@ -109,5 +120,15 @@ export function buildCouncilSnapshot(
       color: member.color.trim(),
     }))
 
-  return { ok: true, snapshot: { name, rounds, members } }
+  // A3: the key is emitted only when there is something to say. A directive-less
+  // council therefore produces byte-identical JSON to a pre-A3 snapshot, which is
+  // what keeps the transfer round trip and the snapshot-immunity bytes stable.
+  // No new refusal path: the 2,000-character bound is enforced at the write
+  // boundary, and a legacy over-long row must not brick an existing council.
+  const directive = council.directive?.trim() ?? ''
+
+  return {
+    ok: true,
+    snapshot: { name, rounds, ...(directive.length === 0 ? {} : { directive }), members },
+  }
 }

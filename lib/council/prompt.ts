@@ -42,6 +42,12 @@ const EMPTY_TRANSCRIPT_PLACEHOLDER = '(No turns yet. You speak first.)'
 export const CONVENER_NOTE_HEADING = "CONVENER'S LATEST NOTE"
 
 /**
+ * Heading of the council-level directive block (PRD §5.2, Amendment A3).
+ * Exported for the same reason as `CONVENER_NOTE_HEADING`.
+ */
+export const COUNCIL_DIRECTIVE_HEADING = 'COUNCIL DIRECTIVE:'
+
+/**
  * PRD §5.2: "Address the most recent interjection if one exists since your last
  * turn." The system prompt states that rule generically for every turn; this is
  * the explicit, text-referencing form added only when there is a note to address.
@@ -105,9 +111,13 @@ export type TurnPromptInput = {
 }
 
 /**
- * Charter first, then the fixed rules of PRD §5.2. The engage-by-name rule is
- * omitted in round 1 (there is nothing to engage yet) and for the synthesis,
- * which addresses every member at once.
+ * Charter first, then the council directive when the session's snapshot carries
+ * one (PRD §5.2, Amendment A3), then the fixed rules of PRD §5.2. The
+ * engage-by-name rule is omitted in round 1 (there is nothing to engage yet) and
+ * for the synthesis, which addresses every member at once.
+ *
+ * The directive block is omitted entirely — not emitted empty — when the council
+ * has none, so a directive-less prompt is byte-identical to a pre-A3 one.
  */
 export function buildSystemPrompt(input: {
   charter: string
@@ -115,6 +125,8 @@ export function buildSystemPrompt(input: {
   role: string
   round: number
   isSynthesis?: boolean
+  /** From `council_snapshot.directive`; absent or null means no directive. */
+  directive?: string | null
 }): string {
   const isSynthesis = input.isSynthesis === true
   const rules: string[] = [
@@ -138,7 +150,15 @@ export function buildSystemPrompt(input: {
     `Be concise. Keep your response under ${MAX_WORDS_PER_TURN} words.`,
   )
 
-  return [input.charter.trim(), '', 'COUNCIL RULES:', ...rules.map((r) => `- ${r}`)].join('\n')
+  const directive = input.directive?.trim() ?? ''
+
+  return [
+    input.charter.trim(),
+    ...(directive.length === 0 ? [] : ['', COUNCIL_DIRECTIVE_HEADING, directive]),
+    '',
+    'COUNCIL RULES:',
+    ...rules.map((r) => `- ${r}`),
+  ].join('\n')
 }
 
 function renderRoster(snapshot: CouncilSnapshot): string {
@@ -197,6 +217,9 @@ export function buildTurnPrompt(input: TurnPromptInput): BuiltPrompt {
       role: input.speaker.role,
       round: input.round,
       isSynthesis: input.kind === 'synthesis',
+      // A3: the directive reaches every member, the Chair included — the Chair's
+      // charter comes from the caller, the directive from the session snapshot.
+      directive: input.snapshot.directive,
     }),
     prompt,
     maxTokens: input.kind === 'synthesis' ? SYNTHESIS_MAX_TOKENS : PERSONA_MAX_TOKENS,

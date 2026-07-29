@@ -24,6 +24,11 @@ export type CouncilDetail = {
   id: string
   name: string
   description: string | null
+  /**
+   * PRD Amendment A3: fed to every member on every turn, unlike `description`,
+   * which is display-only. Null when the council has none.
+   */
+  directive: string | null
   defaultRounds: number
   members: CouncilMemberSummary[]
 }

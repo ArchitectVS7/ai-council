@@ -52,6 +52,8 @@ const PANEL = {
   id: '7d8e2f10-3c4b-4a5d-8e6f-9a0b1c2d3e4f',
   name: 'Decision Panel',
   description: 'General-purpose judgement.',
+  // A3: null here, so the "pre-fills an empty box" path is covered too.
+  directive: null,
   defaultRounds: 2,
   members: [
     { personaId: PRAGMATIST.id, position: 0, name: PRAGMATIST.name, color: PRAGMATIST.color },
@@ -63,6 +65,7 @@ const RED_TEAM = {
   id: '2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f',
   name: 'Red Team',
   description: null,
+  directive: 'Argue adversarially. Do not converge until the evidence forces it.',
   defaultRounds: 3,
   members: [
     { personaId: SKEPTIC.id, position: 0, name: SKEPTIC.name, color: SKEPTIC.color },
@@ -220,6 +223,7 @@ describe('creating a council', () => {
 
     fireEvent.change(field('Name'), { target: { value: '  Red Team  ' } })
     fireEvent.change(field('Description'), { target: { value: '  Adversarial review.  ' } })
+    fireEvent.change(field('Directive'), { target: { value: '  Argue adversarially.  ' } })
     fireEvent.change(field('Default rounds'), { target: { value: '3' } })
     fireEvent.change(field('Add persona'), { target: { value: SKEPTIC.id } })
     click('Add')
@@ -235,6 +239,7 @@ describe('creating a council', () => {
     expect(bodyOf(init)).toEqual({
       name: 'Red Team',
       description: 'Adversarial review.',
+      directive: 'Argue adversarially.',
       defaultRounds: 3,
       members: [
         { personaId: SKEPTIC.id, position: 0 },
@@ -243,6 +248,7 @@ describe('creating a council', () => {
     })
     // The form is back in create mode.
     expect((field('Name') as HTMLInputElement).value).toBe('')
+    expect((field('Directive') as HTMLTextAreaElement).value).toBe('')
   })
 
   it('sends a null description when the box is left blank', async () => {
@@ -257,6 +263,20 @@ describe('creating a council', () => {
 
     await screen.findByText('Red Team')
     expect(bodyOf(fetchSpy.mock.calls[0][1]).description).toBeNull()
+  })
+
+  it('sends a null directive when the box is left blank (A3)', async () => {
+    const fetchSpy = stubFetch(async () => json({ council: RED_TEAM }, 201))
+    render(<CouncilBuilder initialCouncils={[]} personas={PERSONAS} />)
+
+    fireEvent.change(field('Name'), { target: { value: 'Red Team' } })
+    click('Add')
+    fireEvent.change(field('Add persona'), { target: { value: SKEPTIC.id } })
+    click('Add')
+    click('Create council')
+
+    await screen.findByText('Red Team')
+    expect(bodyOf(fetchSpy.mock.calls[0][1]).directive).toBeNull()
   })
 
   it('refuses an empty name before reaching the server', async () => {
@@ -347,6 +367,7 @@ describe('editing a council', () => {
     expect(bodyOf(init)).toEqual({
       name: 'Decision Panel',
       description: 'General-purpose judgement.',
+      directive: null,
       defaultRounds: 2,
       members: [
         { personaId: SKEPTIC.id, position: 0 },
@@ -366,6 +387,68 @@ describe('editing a council', () => {
     click('Edit Red Team')
 
     expect((field('Description') as HTMLTextAreaElement).value).toBe('')
+  })
+})
+
+describe('the council directive (PRD Amendment A3)', () => {
+  const HELPER =
+    'Fed to every member on every turn — use it to set the mode (adversarial, cooperative, hybrid-seeking). Description is display-only.'
+
+  it('renders the Directive textarea with the helper text that distinguishes it from the description', () => {
+    render(<CouncilBuilder initialCouncils={SEEDED} personas={PERSONAS} />)
+
+    const textarea = field('Directive')
+    expect(textarea.tagName).toBe('TEXTAREA')
+
+    const help = screen.getByText(/Fed to every member on every turn/)
+    expect(help.textContent).toBe(HELPER)
+    // The helper is wired to the field, not merely nearby.
+    expect(textarea.getAttribute('aria-describedby')).toBe(help.id)
+  })
+
+  it('pre-fills the stored directive when editing, and an empty box when there is none', () => {
+    render(<CouncilBuilder initialCouncils={SEEDED} personas={PERSONAS} />)
+
+    click('Edit Red Team')
+    expect((field('Directive') as HTMLTextAreaElement).value).toBe(RED_TEAM.directive)
+
+    click('Edit Decision Panel')
+    expect((field('Directive') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('round-trips an edited directive: PUTs it and re-renders from the server response', async () => {
+    const stored = { ...PANEL, directive: 'Seek a hybrid position, not a winner.' }
+    const fetchSpy = stubFetch(async () => json({ council: stored }))
+    render(<CouncilBuilder initialCouncils={SEEDED} personas={PERSONAS} />)
+
+    click('Edit Decision Panel')
+    fireEvent.change(field('Directive'), {
+      target: { value: '  Seek a hybrid position, not a winner.  ' },
+    })
+    click('Save council')
+
+    await screen.findByRole('status')
+
+    const [url, init] = fetchSpy.mock.calls[0]
+    expect(url).toBe(`/api/councils/${PANEL.id}`)
+    expect(init?.method).toBe('PUT')
+    expect(bodyOf(init).directive).toBe('Seek a hybrid position, not a winner.')
+
+    // The list now holds what the server stored; re-opening the editor shows it.
+    click('Edit Decision Panel')
+    expect((field('Directive') as HTMLTextAreaElement).value).toBe(stored.directive)
+  })
+
+  it('clears a directive by emptying the box, sending null rather than an empty string', async () => {
+    const fetchSpy = stubFetch(async () => json({ council: { ...RED_TEAM, directive: null } }))
+    render(<CouncilBuilder initialCouncils={SEEDED} personas={PERSONAS} />)
+
+    click('Edit Red Team')
+    fireEvent.change(field('Directive'), { target: { value: '   ' } })
+    click('Save council')
+
+    await screen.findByRole('status')
+    expect(bodyOf(fetchSpy.mock.calls[0][1]).directive).toBeNull()
   })
 })
 

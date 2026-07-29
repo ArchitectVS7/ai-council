@@ -220,6 +220,36 @@ describe('sessionDocumentSchema — council snapshot bounds (PRD §5.3)', () => 
     )
   })
 
+  it('accepts a snapshot carrying a council directive, and one omitting the key (A3)', () => {
+    const directive = 'Argue adversarially. Do not converge until the evidence forces it.'
+    const withDirective = withSession({ councilSnapshot: { ...SNAPSHOT, directive } })
+    const parsed = sessionDocumentSchema.safeParse(withDirective)
+
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true)
+    expect(parsed.data!.session.councilSnapshot.directive).toBe(directive)
+
+    // The pre-A3 shape — no key at all — still parses.
+    expect('directive' in (document().session as { councilSnapshot: object }).councilSnapshot).toBe(
+      false,
+    )
+    expect(sessionDocumentSchema.safeParse(document()).success).toBe(true)
+  })
+
+  it('accepts an explicit null directive from a hand-written document', () => {
+    const doc = withSession({ councilSnapshot: { ...SNAPSHOT, directive: null } })
+    expect(sessionDocumentSchema.safeParse(doc).success).toBe(true)
+  })
+
+  it('refuses a blank directive rather than importing a meaningless one', () => {
+    const doc = withSession({ councilSnapshot: { ...SNAPSHOT, directive: '   ' } })
+    expect(messages(doc)).toContain('A council directive must not be blank.')
+  })
+
+  it('refuses a directive past the 2,000-character bound', () => {
+    const doc = withSession({ councilSnapshot: { ...SNAPSHOT, directive: 'x'.repeat(2_001) } })
+    expect(messages(doc).join(' ')).toMatch(/too big|at most|2000/i)
+  })
+
   it('refuses a colour that is not a hex value', () => {
     const members = [{ ...SNAPSHOT.members[0], color: 'blue' }, SNAPSHOT.members[1]]
     expect(messages(withSession({ councilSnapshot: { ...SNAPSHOT, members } }))).toContain(
@@ -299,6 +329,36 @@ describe('schema and exporter stay in lockstep', () => {
     )
     expect(Object.keys((round.turns as object[])[0])).toEqual(
       Object.keys((exported.turns as object[])[0]),
+    )
+  })
+
+  it('keeps key parity for a snapshot carrying a directive (A3)', () => {
+    const exported = JSON.parse(
+      JSON.stringify(
+        toSessionDocument({
+          topic: 'Should we ship on Friday?',
+          model: null,
+          status: 'active',
+          turnCursor: 0,
+          createdAt: '2026-07-28T09:15:00.000Z',
+          completedAt: null,
+          councilSnapshot: { ...SNAPSHOT, directive: 'Argue adversarially.' },
+          turns: [],
+        }),
+      ),
+    ) as Record<string, unknown>
+
+    const snapshotKeys = Object.keys(
+      (exported.session as { councilSnapshot: object }).councilSnapshot,
+    )
+    expect(snapshotKeys).toEqual(['name', 'rounds', 'directive', 'members'])
+
+    const parsed = sessionDocumentSchema.safeParse(exported)
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true)
+
+    const round = JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>
+    expect(Object.keys((round.session as { councilSnapshot: object }).councilSnapshot)).toEqual(
+      snapshotKeys,
     )
   })
 })

@@ -73,6 +73,8 @@ export default function CouncilBuilder({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  /** PRD Amendment A3: reaches the model on every turn, unlike the description. */
+  const [directive, setDirective] = useState('')
   /** Held as text so the field can be cleared; parsed and range-checked on submit. */
   const [rounds, setRounds] = useState(String(DEFAULT_ROUNDS))
   const [seats, setSeats] = useState<Seat[]>([])
@@ -94,6 +96,7 @@ export default function CouncilBuilder({
     setEditingId(null)
     setName('')
     setDescription('')
+    setDirective('')
     setRounds(String(DEFAULT_ROUNDS))
     setSeats([])
     setPendingPersonaId('')
@@ -105,6 +108,7 @@ export default function CouncilBuilder({
     setEditingId(council.id)
     setName(council.name)
     setDescription(council.description ?? '')
+    setDirective(council.directive ?? '')
     setRounds(String(council.defaultRounds))
     setSeats(seatsOf(council))
     setPendingPersonaId('')
@@ -142,12 +146,13 @@ export default function CouncilBuilder({
       return
     }
 
-    // Exactly these four keys: `councilInputSchema` is strict and reports an
+    // Exactly these five keys: `councilInputSchema` is strict and reports an
     // unknown one as a 400. The positions are the current on-screen order; the
     // server renumbers them before storing.
     const input = {
       name: trimmedName,
       description: description.trim().length === 0 ? null : description.trim(),
+      directive: directive.trim().length === 0 ? null : directive.trim(),
       defaultRounds: parsedRounds,
       members: seats.map((seat, index) => ({ personaId: seat.personaId, position: index })),
     }
@@ -308,6 +313,24 @@ export default function CouncilBuilder({
               className="rounded border border-slate-300 p-2 text-sm"
               placeholder="What is this council for?"
             />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="council-directive" className="text-sm font-medium text-slate-900">
+              Directive
+            </label>
+            <textarea
+              id="council-directive"
+              rows={3}
+              value={directive}
+              onChange={(event) => setDirective(event.target.value)}
+              aria-describedby="council-directive-help"
+              className="rounded border border-slate-300 p-2 text-sm"
+            />
+            <p id="council-directive-help" className="text-sm text-slate-600">
+              Fed to every member on every turn — use it to set the mode (adversarial, cooperative,
+              hybrid-seeking). Description is display-only.
+            </p>
           </div>
 
           <div className="flex flex-col gap-1">

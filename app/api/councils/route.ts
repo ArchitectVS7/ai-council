@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return badRequest('Invalid request body.', parsed.error.issues)
     }
-    const { name, description, defaultRounds, members } = parsed.data
+    const { name, description, directive, defaultRounds, members } = parsed.data
 
     const known = await findPersonasByIds(members.map((member) => member.personaId))
     const unknown = findUnknownPersonaId(
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       return badRequest(`Persona ${unknown} is not in the library; it cannot be seated.`)
     }
 
-    const created = await insertCouncil({ name, description, defaultRounds })
+    const created = await insertCouncil({ name, description, directive, defaultRounds })
     await replaceCouncilMembers(created.id, normalizeCouncilMembers(members))
 
     return Response.json({ council: await findCouncilDetail(created.id) }, { status: 201 })

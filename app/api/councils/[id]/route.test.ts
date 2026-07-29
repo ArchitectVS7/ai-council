@@ -55,6 +55,7 @@ const DETAIL = {
   id: ID,
   name: 'Decision Panel',
   description: 'General-purpose judgement.',
+  directive: 'Argue adversarially before converging.',
   defaultRounds: 3,
   members: [
     { personaId: SKEPTIC, position: 0, name: 'The Skeptic', color: '#dc2626' },
@@ -66,6 +67,7 @@ function councilInput(overrides: Record<string, unknown> = {}) {
   return {
     name: 'Decision Panel',
     description: 'General-purpose judgement.',
+    directive: 'Argue adversarially before converging.',
     defaultRounds: 3,
     members: [
       { personaId: PRAGMATIST, position: 0 },
@@ -105,9 +107,11 @@ describe('PUT /api/councils/[id]', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ council: DETAIL })
+    // A3: the directive is replaced alongside the display-only description.
     expect(updateCouncilMock).toHaveBeenCalledWith(ID, {
       name: 'Decision Panel',
       description: 'General-purpose judgement.',
+      directive: 'Argue adversarially before converging.',
       defaultRounds: 3,
     })
   })
@@ -161,6 +165,8 @@ describe('PUT /api/councils/[id]', () => {
     ['defaultRounds 6', councilInput({ defaultRounds: 6 })],
     ['a whitespace-only name', councilInput({ name: '   ' })],
     ['a missing description key', { ...councilInput(), description: undefined }],
+    ['a missing directive key', { ...councilInput(), directive: undefined }],
+    ['an over-long directive', councilInput({ directive: 'x'.repeat(2_001) })],
     ['an unknown key', councilInput({ archived: true })],
     [
       'a duplicate persona',

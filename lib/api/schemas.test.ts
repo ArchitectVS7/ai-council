@@ -17,6 +17,7 @@ const UUID_C = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
 const COUNCIL = {
   name: 'Decision Panel',
   description: 'General-purpose judgement.',
+  directive: null,
   defaultRounds: 2,
   members: [
     { personaId: UUID, position: 0 },
@@ -231,6 +232,36 @@ describe('councilInputSchema', () => {
     expect(result.success && result.data.description).toBe('Adversarial review.')
   })
 
+  describe('directive (PRD Amendment A3)', () => {
+    it('accepts a null directive — the form sends null for a blank box', () => {
+      const result = councilInputSchema.safeParse({ ...COUNCIL, directive: null })
+      expect(result.success && result.data.directive).toBeNull()
+    })
+
+    it('accepts and trims a directive', () => {
+      const result = councilInputSchema.safeParse({
+        ...COUNCIL,
+        directive: '  Argue adversarially.  ',
+      })
+      expect(result.success && result.data.directive).toBe('Argue adversarially.')
+    })
+
+    it('accepts a directive of exactly 2,000 characters', () => {
+      const directive = 'x'.repeat(2_000)
+      const result = councilInputSchema.safeParse({ ...COUNCIL, directive })
+      expect(result.success, JSON.stringify(result.error?.issues)).toBe(true)
+      expect(result.success && result.data.directive).toBe(directive)
+    })
+
+    it('rejects 2,001 characters, naming the bound', () => {
+      const result = councilInputSchema.safeParse({ ...COUNCIL, directive: 'x'.repeat(2_001) })
+      expect(result.success).toBe(false)
+      expect(result.error!.issues.map((issue) => issue.message)).toContain(
+        'A directive may be at most 2000 characters.',
+      )
+    })
+  })
+
   it.each([2, 3, 4, 5, 6, 7, 8])('accepts a council of %i personas', (count) => {
     expect(councilInputSchema.safeParse({ ...COUNCIL, members: seats(count) }).success).toBe(true)
   })
@@ -261,6 +292,9 @@ describe('councilInputSchema', () => {
     ['an over-long name', { ...COUNCIL, name: 'x'.repeat(81) }, 'name'],
     ['a missing description key', { ...COUNCIL, description: undefined }, 'description'],
     ['an over-long description', { ...COUNCIL, description: 'x'.repeat(1_001) }, 'description'],
+    ['a missing directive key', { ...COUNCIL, directive: undefined }, 'directive'],
+    ['an over-long directive', { ...COUNCIL, directive: 'x'.repeat(2_001) }, 'directive'],
+    ['a non-string directive', { ...COUNCIL, directive: 42 }, 'directive'],
     ['defaultRounds 0', { ...COUNCIL, defaultRounds: 0 }, 'defaultRounds'],
     ['defaultRounds 6', { ...COUNCIL, defaultRounds: 6 }, 'defaultRounds'],
     ['fractional defaultRounds', { ...COUNCIL, defaultRounds: 2.5 }, 'defaultRounds'],

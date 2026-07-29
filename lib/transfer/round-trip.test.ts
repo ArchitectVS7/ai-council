@@ -66,6 +66,9 @@ function persistFake(document: SessionDocument, scramble: boolean): StoredSessio
           name: member.name,
           role: member.role,
         })),
+        // A3: carried through the scramble only when the document had one, so a
+        // directive-less snapshot stays exactly the shape jsonb held pre-A3.
+        ...(snapshot.directive === undefined ? {} : { directive: snapshot.directive }),
         rounds: snapshot.rounds,
         name: snapshot.name,
       } as CouncilSnapshot)
@@ -108,10 +111,13 @@ function iso(minutes: number): string {
   return new Date(BASE_MS + minutes * 60_000).toISOString()
 }
 
-function snapshotOf(memberCount: number, rounds: number): CouncilSnapshot {
+function snapshotOf(memberCount: number, rounds: number, directive?: string): CouncilSnapshot {
   return {
     name: 'Decision Panel',
     rounds,
+    // A3: omitted, never null, when there is none — the key order the exporter
+    // and the schema both use is `{name, rounds, directive?, members}`.
+    ...(directive === undefined ? {} : { directive }),
     members: Array.from({ length: memberCount }, (_, index) => ({
       name: `Member ${index}`,
       role: `Role ${index}`,
@@ -228,6 +234,19 @@ const NAMED_FIXTURES: { name: string; document: SessionDocument }[] = [
     name: 'an abandoned session with an empty transcript',
     document: documentOf({ status: 'abandoned', turnCursor: 0 }, []),
   },
+  {
+    name: 'a session whose snapshot carries a council directive (A3)',
+    document: documentOf(
+      {
+        councilSnapshot: snapshotOf(
+          3,
+          2,
+          'Argue adversarially. Do not converge until the evidence forces it.',
+        ),
+      },
+      [personaTurn(0, 'Member 0', 1), personaTurn(1, 'Member 1', 1), synthesisTurn(2, 1)],
+    ),
+  },
 ]
 
 /** A corpus of varied but always-legal documents, generated from one seed. */
@@ -238,7 +257,11 @@ function generatedFixtures(count: number): SessionDocument[] {
 
   return Array.from({ length: count }, () => {
     const members = between(2, 8)
-    const snapshot = snapshotOf(members, between(1, 5))
+    const snapshot = snapshotOf(
+      members,
+      between(1, 5),
+      random() < 0.5 ? undefined : `Directive: ${pick(TOPICS).trim() || 'stay adversarial'}`,
+    )
     const turns: Turn[] = []
 
     for (let seq = 0; seq < between(0, 14); seq += 1) {
@@ -314,6 +337,18 @@ describe('the generated corpus is not degenerate', () => {
 
   it('covers every session status', () => {
     expect(new Set(GENERATED.map((doc) => doc.session.status)).size).toBe(3)
+  })
+
+  it('covers snapshots both with and without a council directive (A3)', () => {
+    const withDirective = GENERATED.filter(
+      (doc) => doc.session.councilSnapshot.directive !== undefined,
+    )
+    expect(withDirective.length).toBeGreaterThan(0)
+    expect(GENERATED.length - withDirective.length).toBeGreaterThan(0)
+    // Absent, never null — a null would change the exported bytes.
+    for (const doc of GENERATED) {
+      expect(doc.session.councilSnapshot.directive).not.toBeNull()
+    }
   })
 })
 

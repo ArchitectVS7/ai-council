@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   MAX_COUNCIL_MEMBERS,
+  MAX_DIRECTIVE_LENGTH,
   MAX_ROUNDS,
   MIN_COUNCIL_MEMBERS,
   MIN_ROUNDS,
@@ -26,6 +27,7 @@ function sampleCouncil(overrides: Partial<SnapshotSource> = {}): SnapshotSource 
   return {
     name: 'Decision Panel',
     defaultRounds: 2,
+    directive: null,
     members: [
       {
         name: 'Skeptic',
@@ -123,6 +125,7 @@ describe('buildCouncilSnapshot', () => {
       buildCouncilSnapshot({
         name: '  Red Team  ',
         defaultRounds: 1,
+        directive: null,
         members: [
           member({ position: 0, name: ' A ', role: ' r ', charter: ' c ', color: ' #fff ' }),
           member({ position: 1 }),
@@ -207,5 +210,48 @@ describe('buildCouncilSnapshot', () => {
     const result = buildCouncilSnapshot(sampleCouncil({ name: '  ' }))
     expect(result.ok).toBe(false)
     expect(result.ok === false && result.message).toContain('no name')
+  })
+})
+
+describe('the council directive (PRD Amendment A3)', () => {
+  const DIRECTIVE = 'Argue adversarially. Do not converge until the evidence forces it.'
+
+  it('copies the directive into the snapshot at the {name, rounds, directive, members} key order', () => {
+    const snapshot = expectOk(buildCouncilSnapshot(sampleCouncil({ directive: DIRECTIVE })))
+
+    expect(snapshot.directive).toBe(DIRECTIVE)
+    // Key order is what the transfer round-trip compares byte for byte.
+    expect(Object.keys(snapshot)).toEqual(['name', 'rounds', 'directive', 'members'])
+  })
+
+  it('trims the directive', () => {
+    const snapshot = expectOk(
+      buildCouncilSnapshot(sampleCouncil({ directive: `  ${DIRECTIVE}  ` })),
+    )
+    expect(snapshot.directive).toBe(DIRECTIVE)
+  })
+
+  it.each([
+    ['null', null],
+    ['an empty string', ''],
+    ['whitespace only', '   \n  '],
+  ])('omits the key entirely for %s, so the snapshot stays pre-A3 shaped', (_label, directive) => {
+    const snapshot = expectOk(buildCouncilSnapshot(sampleCouncil({ directive })))
+
+    expect('directive' in snapshot).toBe(false)
+    expect(Object.keys(snapshot)).toEqual(['name', 'rounds', 'members'])
+    // Deep-equal to the snapshot a directive-less council produced before A3.
+    expect(snapshot).toEqual(expectOk(buildCouncilSnapshot(sampleCouncil({ directive: null }))))
+  })
+
+  it(`carries a directive at the ${MAX_DIRECTIVE_LENGTH}-character bound`, () => {
+    const long = 'x'.repeat(MAX_DIRECTIVE_LENGTH)
+    expect(expectOk(buildCouncilSnapshot(sampleCouncil({ directive: long }))).directive).toBe(long)
+  })
+
+  it('does not refuse a legacy over-long directive — the bound lives at the write boundary', () => {
+    const tooLong = 'x'.repeat(MAX_DIRECTIVE_LENGTH + 1)
+    const snapshot = expectOk(buildCouncilSnapshot(sampleCouncil({ directive: tooLong })))
+    expect(snapshot.directive).toBe(tooLong)
   })
 })

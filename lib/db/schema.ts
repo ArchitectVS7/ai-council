@@ -40,6 +40,8 @@ export const councils = pgTable('councils', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   description: text('description'),
+  /** Council-level instruction fed to every member on every turn (PRD Amendment A3). */
+  directive: text('directive'),
   defaultRounds: integer('default_rounds').notNull().default(2),
   archived: boolean('archived').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -42,7 +42,7 @@ const store = vi.hoisted(() => {
     topic: string
     councilId: string
     model: string | null
-    councilSnapshot: { name: string; rounds: number; members: unknown[] }
+    councilSnapshot: { name: string; rounds: number; directive?: string; members: unknown[] }
     status: string
     turnCursor: number
     createdAt: Date
@@ -81,6 +81,8 @@ const store = vi.hoisted(() => {
       id: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
       name: 'Decision Panel',
       description: 'General-purpose judgement.',
+      // A3: null at first; one case below adds one *after* a session exists.
+      directive: null as string | null,
       defaultRounds: 2,
       archived: false,
     },
@@ -112,6 +114,7 @@ vi.mock('@/lib/db/repo', () => {
         ? {
             name: store.council.name,
             defaultRounds: store.council.defaultRounds,
+            directive: store.council.directive,
             members: store.members.map((member) => {
               const { name, role, charter, color } = persona(member.personaId)
               return { name, role, charter, color, position: member.position }
@@ -130,7 +133,12 @@ vi.mock('@/lib/db/repo', () => {
         topic: input.topic,
         councilId: input.councilId,
         model: input.model ?? null,
-        councilSnapshot: input.snapshot as { name: string; rounds: number; members: unknown[] },
+        councilSnapshot: input.snapshot as {
+          name: string
+          rounds: number
+          directive?: string
+          members: unknown[]
+        },
         status: 'active',
         turnCursor: 0,
         createdAt: store.created,
@@ -162,7 +170,12 @@ vi.mock('@/lib/db/repo', () => {
 
     updateCouncil: async (
       councilId: string,
-      patch: { name: string; description: string | null; defaultRounds: number },
+      patch: {
+        name: string
+        description: string | null
+        directive: string | null
+        defaultRounds: number
+      },
     ) => {
       if (councilId !== store.council.id) return null
       Object.assign(store.council, patch)
@@ -182,6 +195,7 @@ vi.mock('@/lib/db/repo', () => {
             id: store.council.id,
             name: store.council.name,
             description: store.council.description,
+            directive: store.council.directive,
             defaultRounds: store.council.defaultRounds,
             members: store.members.map((member) => ({
               personaId: member.personaId,
@@ -213,6 +227,7 @@ async function readSessionBytes(): Promise<{ one: string; list: string }> {
 beforeEach(() => {
   store.council.name = 'Decision Panel'
   store.council.description = 'General-purpose judgement.'
+  store.council.directive = null
   store.council.defaultRounds = 2
   store.members = [
     { personaId: PRAGMATIST, position: 0 },
@@ -247,6 +262,7 @@ describe('editing a council cannot alter a session that already ran (PRD §7)', 
         body: JSON.stringify({
           name: 'Renamed Panel',
           description: 'Rewritten description.',
+          directive: 'Rewritten directive.',
           defaultRounds: 5,
           members: [
             { personaId: ECONOMIST, position: 0 },
@@ -293,6 +309,7 @@ describe('editing a council cannot alter a session that already ran (PRD §7)', 
         body: JSON.stringify({
           name: 'Renamed Panel',
           description: null,
+          directive: null,
           defaultRounds: 4,
           members: [
             { personaId: ECONOMIST, position: 0 },
@@ -345,6 +362,7 @@ describe('editing a council cannot alter a session that already ran (PRD §7)', 
         body: JSON.stringify({
           name: 'Renamed Panel',
           description: null,
+          directive: null,
           defaultRounds: 2,
           members: [
             { personaId: SKEPTIC, position: 0 },
@@ -359,5 +377,93 @@ describe('editing a council cannot alter a session that already ran (PRD §7)', 
     const body = (await response.json()) as { sessions: { councilName: string }[] }
 
     expect(body.sessions.map((session) => session.councilName)).toEqual(['Decision Panel'])
+  })
+
+  it('adding a directive after the session was created leaves its reads byte-identical (A3)', async () => {
+    const created = await createSession(
+      new Request('http://localhost/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: 'Runway', councilId: COUNCIL_ID }),
+      }),
+    )
+    expect(created.status).toBe(201)
+
+    const before = await readSessionBytes()
+
+    const edited = await updateCouncilRoute(
+      new Request(`http://localhost/api/councils/${COUNCIL_ID}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Decision Panel',
+          description: 'General-purpose judgement.',
+          directive: 'From now on, argue adversarially.',
+          defaultRounds: 2,
+          members: [
+            { personaId: PRAGMATIST, position: 0 },
+            { personaId: SKEPTIC, position: 1 },
+            { personaId: ECONOMIST, position: 2 },
+          ],
+        }),
+      }),
+      { params: Promise.resolve({ id: COUNCIL_ID }) },
+    )
+
+    // The directive really landed on the council, or this would pass vacuously.
+    expect(edited.status).toBe(200)
+    expect(store.council.directive).toBe('From now on, argue adversarially.')
+
+    const after = await readSessionBytes()
+
+    expect(after.one).toBe(before.one)
+    expect(after.list).toBe(before.list)
+    // And the frozen snapshot still carries no directive at all.
+    expect(before.one).not.toContain('directive')
+  })
+
+  it('freezes a directive that was set before the session was created (A3)', async () => {
+    store.council.directive = 'Seek a hybrid position rather than a winner.'
+
+    await createSession(
+      new Request('http://localhost/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: 'Runway', councilId: COUNCIL_ID }),
+      }),
+    )
+
+    const before = await readSessionBytes()
+
+    // Clearing it on the council must not reach the session that already ran.
+    await updateCouncilRoute(
+      new Request(`http://localhost/api/councils/${COUNCIL_ID}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Decision Panel',
+          description: null,
+          directive: null,
+          defaultRounds: 2,
+          members: [
+            { personaId: PRAGMATIST, position: 0 },
+            { personaId: SKEPTIC, position: 1 },
+          ],
+        }),
+      }),
+      { params: Promise.resolve({ id: COUNCIL_ID }) },
+    )
+
+    const response = await getSession(sessionRequest(), {
+      params: Promise.resolve({ id: SESSION_ID }),
+    })
+    const body = (await response.json()) as {
+      session: { councilSnapshot: { directive?: string } }
+    }
+
+    expect(body.session.councilSnapshot.directive).toBe(
+      'Seek a hybrid position rather than a winner.',
+    )
+    expect((await readSessionBytes()).one).toBe(before.one)
   })
 })

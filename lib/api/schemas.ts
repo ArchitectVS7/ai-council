@@ -10,6 +10,7 @@ import { z } from 'zod'
 
 import {
   MAX_COUNCIL_MEMBERS,
+  MAX_DIRECTIVE_LENGTH,
   MAX_ROUNDS,
   MIN_COUNCIL_MEMBERS,
   MIN_ROUNDS,
@@ -90,6 +91,9 @@ const councilMemberSchema = z.strictObject({
  * restated, so the builder and the snapshot builder can never disagree about
  * what a legal council is. `description` is a required key with a nullable value
  * — the form sends `null` when the box is blank, so "cleared" is expressible.
+ * `directive` follows the same convention. The two are not interchangeable:
+ * `description` is display-only, while the directive is fed to every member on
+ * every turn (PRD Amendment A3).
  *
  * `archived` is deliberately not accepted: archiving is a server decision made
  * by `DELETE` when the council is still referenced, never something the client
@@ -98,6 +102,11 @@ const councilMemberSchema = z.strictObject({
 export const councilInputSchema = z.strictObject({
   name: z.string().trim().min(1, 'Name is required.').max(80),
   description: z.string().trim().max(1_000).nullable(),
+  directive: z
+    .string()
+    .trim()
+    .max(MAX_DIRECTIVE_LENGTH, `A directive may be at most ${MAX_DIRECTIVE_LENGTH} characters.`)
+    .nullable(),
   defaultRounds: z.number().int().min(MIN_ROUNDS).max(MAX_ROUNDS),
   members: z
     .array(councilMemberSchema)

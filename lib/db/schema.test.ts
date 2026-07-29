@@ -18,6 +18,8 @@ const PRD_TABLES: Record<string, string[]> = {
     'id',
     'name',
     'description',
+    // Amendment A3: council-level instruction fed to every member on every turn.
+    'directive',
     'default_rounds',
     'archived',
     'created_at',
@@ -111,6 +113,11 @@ describe('nullability and defaults the PRD calls out', () => {
     expect(schema.sessions.model.hasDefault).toBe(false)
   })
 
+  it('councils.directive is nullable — null means no directive (Amendment A3)', () => {
+    expect(schema.councils.directive.notNull).toBe(false)
+    expect(schema.councils.directive.hasDefault).toBe(false)
+  })
+
   it('turns.speaker_name is nullable (null for interjections) and error is nullable', () => {
     expect(schema.turns.speakerName.notNull).toBe(false)
     expect(schema.turns.error.notNull).toBe(false)
@@ -154,14 +161,27 @@ describe('generated migration SQL', () => {
     expect(sql).not.toMatch(/ADD COLUMN "model" text[^;]*NOT NULL/)
   })
 
-  it('alters no table other than sessions — a column, not a schema change', () => {
+  it('adds councils.directive as a nullable column (Amendment A3)', () => {
+    expect(sql).toContain('ALTER TABLE "councils" ADD COLUMN "directive" text')
+    // Nullable: no NOT NULL, and no default that would rewrite existing rows.
+    expect(sql).not.toMatch(/ADD COLUMN "directive" text[^;]*NOT NULL/)
+    expect(sql).not.toMatch(/ADD COLUMN "directive" text[^;]*DEFAULT/)
+  })
+
+  it('adds no column to councils beyond directive', () => {
+    const added = [...sql.matchAll(/ALTER TABLE "councils" ADD COLUMN "([^"]+)"/g)].map((m) => m[1])
+    expect(added).toEqual(['directive'])
+  })
+
+  it('alters only sessions and councils — columns, not schema changes', () => {
     const altered = [...sql.matchAll(/ALTER TABLE "([^"]+)"/g)].map((m) => m[1])
-    // `0000` constrains the five tables it creates; only A1 alters anything, and
-    // only `sessions`. Anything else here is drift from PRD §7.
+    // `0000` constrains the five tables it creates; only A1 (`sessions.model`)
+    // and A3 (`councils.directive`) alter anything. Anything else here is drift
+    // from PRD §7.
     const outsideCreate = [...sql.matchAll(/ALTER TABLE "([^"]+)" ADD (?!CONSTRAINT)/g)].map(
       (m) => m[1],
     )
-    expect(new Set(outsideCreate)).toEqual(new Set(['sessions']))
+    expect(new Set(outsideCreate)).toEqual(new Set(['sessions', 'councils']))
     expect(altered.every((name) => name in PRD_TABLES)).toBe(true)
   })
 })

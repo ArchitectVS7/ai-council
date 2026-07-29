@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ADDRESS_INTERJECTION_INSTRUCTION,
   CONVENER_NOTE_HEADING,
+  COUNCIL_DIRECTIVE_HEADING,
   DEFAULT_TEMPERATURE,
   MAX_WORDS_PER_TURN,
   PERSONA_MAX_TOKENS,
@@ -340,5 +341,83 @@ describe('addressing a pending interjection (PRD §5.2)', () => {
     const block = noteBlock(chairBuild(reopened).prompt)
     expect(block).toContain('Now weigh the rollback plan.')
     expect(block).toContain('(Round 3)')
+  })
+})
+
+describe('the council directive (PRD Amendment A3)', () => {
+  const DIRECTIVE = 'Argue adversarially. Do not converge until the evidence forces it.'
+
+  const WITH_DIRECTIVE: CouncilSnapshot = { ...SNAPSHOT, directive: DIRECTIVE }
+
+  /**
+   * A snapshot frozen before A3 shipped: the key is not merely null, it is
+   * absent. The cast is the point — this is the shape already sitting in jsonb.
+   */
+  const PRE_A3: CouncilSnapshot = {
+    name: SNAPSHOT.name,
+    rounds: SNAPSHOT.rounds,
+    members: SNAPSHOT.members,
+  } as CouncilSnapshot
+
+  function build(snapshot: CouncilSnapshot, kind: 'opening' | 'rebuttal' | 'synthesis') {
+    return buildTurnPrompt({
+      topic: 'Rewrite in Rust?',
+      snapshot,
+      turns: [makeTurn({ seq: 0 })],
+      speaker: kind === 'synthesis' ? CHAIR : SNAPSHOT.members[0],
+      round: 2,
+      kind,
+    })
+  }
+
+  it('places the block between the charter and COUNCIL RULES on a persona turn', () => {
+    const system = build(WITH_DIRECTIVE, 'rebuttal').system
+
+    expect(system).toContain(COUNCIL_DIRECTIVE_HEADING)
+    expect(system).toContain(DIRECTIVE)
+    expect(system.indexOf(SNAPSHOT.members[0].charter)).toBeLessThan(
+      system.indexOf(COUNCIL_DIRECTIVE_HEADING),
+    )
+    expect(system.indexOf(COUNCIL_DIRECTIVE_HEADING)).toBeLessThan(
+      system.indexOf('COUNCIL RULES:'),
+    )
+    // The heading is immediately followed by the directive text, on its own line.
+    expect(system).toContain(`${COUNCIL_DIRECTIVE_HEADING}\n${DIRECTIVE}`)
+  })
+
+  it('reaches the Chair too: the synthesis turn carries the same block', () => {
+    const system = build(WITH_DIRECTIVE, 'synthesis').system
+
+    expect(system).toContain(COUNCIL_DIRECTIVE_HEADING)
+    expect(system).toContain(DIRECTIVE)
+    expect(system.indexOf(CHAIR.charter)).toBeLessThan(system.indexOf(COUNCIL_DIRECTIVE_HEADING))
+    expect(system.indexOf(COUNCIL_DIRECTIVE_HEADING)).toBeLessThan(
+      system.indexOf('COUNCIL RULES:'),
+    )
+  })
+
+  it('omits the block entirely when the snapshot carries no directive', () => {
+    for (const kind of ['rebuttal', 'synthesis'] as const) {
+      const system = build({ ...SNAPSHOT, directive: null }, kind).system
+      expect(system).not.toContain('COUNCIL DIRECTIVE')
+    }
+  })
+
+  it('builds an old-shape snapshot without the key at all, byte-identically to a null one', () => {
+    for (const kind of ['opening', 'rebuttal', 'synthesis'] as const) {
+      const legacy = build(PRE_A3, kind)
+      expect(legacy.system).not.toContain('COUNCIL DIRECTIVE')
+      expect(legacy.system).toBe(build({ ...SNAPSHOT, directive: null }, kind).system)
+    }
+  })
+
+  it('treats a whitespace-only directive as none', () => {
+    expect(build({ ...SNAPSHOT, directive: '   \n ' }, 'rebuttal').system).not.toContain(
+      'COUNCIL DIRECTIVE',
+    )
+  })
+
+  it('never leaks the directive into the user prompt — it is a system-prompt rule', () => {
+    expect(build(WITH_DIRECTIVE, 'rebuttal').prompt).not.toContain(DIRECTIVE)
   })
 })

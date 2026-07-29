@@ -87,7 +87,13 @@ export async function findCouncilWithMembers(councilId: string): Promise<Snapsho
   const db = getDb()
 
   const [council] = await db
-    .select({ name: councils.name, defaultRounds: councils.defaultRounds })
+    .select({
+      name: councils.name,
+      defaultRounds: councils.defaultRounds,
+      // A3: the only place the council directive enters a session — copied into
+      // the snapshot at creation and never re-read from the row afterwards.
+      directive: councils.directive,
+    })
     .from(councils)
     .where(eq(councils.id, councilId))
     .limit(1)
@@ -106,7 +112,12 @@ export async function findCouncilWithMembers(councilId: string): Promise<Snapsho
     .where(eq(councilMembers.councilId, councilId))
     .orderBy(asc(councilMembers.position))
 
-  return { name: council.name, defaultRounds: council.defaultRounds, members }
+  return {
+    name: council.name,
+    defaultRounds: council.defaultRounds,
+    directive: council.directive,
+    members,
+  }
 }
 
 /** One option in the council picker on `/` (PRD §6). */
@@ -154,6 +165,7 @@ export async function listCouncilsWithMembers(): Promise<CouncilDetail[]> {
       id: councils.id,
       name: councils.name,
       description: councils.description,
+      directive: councils.directive,
       defaultRounds: councils.defaultRounds,
     })
     .from(councils)
@@ -206,6 +218,7 @@ export async function findCouncilDetail(councilId: string): Promise<CouncilDetai
       id: councils.id,
       name: councils.name,
       description: councils.description,
+      directive: councils.directive,
       defaultRounds: councils.defaultRounds,
     })
     .from(councils)
@@ -241,10 +254,12 @@ export async function findCouncil(
   return council ?? null
 }
 
-/** The three editable council fields of PRD §6 screen 3; create and replace both send all of them. */
+/** The four editable council fields of PRD §6 screen 3; create and replace both send all of them. */
 type CouncilInput = {
   name: string
   description: string | null
+  /** PRD Amendment A3 — display-only `description`'s behavioural counterpart. */
+  directive: string | null
   defaultRounds: number
 }
 
@@ -259,7 +274,7 @@ export async function insertCouncil(input: CouncilInput): Promise<{ id: string }
 }
 
 /**
- * Replace a council's three editable fields. Null when the id matched no row, so
+ * Replace a council's four editable fields. Null when the id matched no row, so
  * the caller can answer 404 rather than pretending the write happened.
  */
 export async function updateCouncil(

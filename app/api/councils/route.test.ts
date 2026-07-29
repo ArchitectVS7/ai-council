@@ -60,6 +60,7 @@ const DETAIL = {
   id: COUNCIL_ID,
   name: 'Decision Panel',
   description: 'General-purpose judgement.',
+  directive: 'Argue adversarially before converging.',
   defaultRounds: 2,
   members: [
     { personaId: PRAGMATIST, position: 0, name: 'The Pragmatist', color: '#2563eb' },
@@ -71,6 +72,7 @@ function councilInput(overrides: Record<string, unknown> = {}) {
   return {
     name: 'Decision Panel',
     description: 'General-purpose judgement.',
+    directive: 'Argue adversarially before converging.',
     defaultRounds: 2,
     members: [
       { personaId: PRAGMATIST, position: 0 },
@@ -132,9 +134,11 @@ describe('POST /api/councils', () => {
 
     expect(response.status).toBe(201)
     expect(await response.json()).toEqual({ council: DETAIL })
+    // A3: the directive is written alongside the display-only description.
     expect(insertCouncilMock).toHaveBeenCalledWith({
       name: 'Decision Panel',
       description: 'General-purpose judgement.',
+      directive: 'Argue adversarially before converging.',
       defaultRounds: 2,
     })
     expect(findCouncilDetailMock).toHaveBeenCalledWith(COUNCIL_ID)
@@ -184,6 +188,8 @@ describe('POST /api/councils', () => {
     ['defaultRounds 6', councilInput({ defaultRounds: 6 })],
     ['fractional defaultRounds', councilInput({ defaultRounds: 2.5 })],
     ['an empty name', councilInput({ name: '  ' })],
+    ['a missing directive key', { ...councilInput(), directive: undefined }],
+    ['an over-long directive', councilInput({ directive: 'x'.repeat(2_001) })],
     ['an unknown key', councilInput({ archived: true })],
   ])('rejects %s with a 400 and writes nothing', async (_label, body) => {
     const response = await POST(postRequest(body))

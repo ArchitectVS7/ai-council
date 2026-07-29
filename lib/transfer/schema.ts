@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { MAX_GENERATED_TURNS } from '@/lib/council/scheduler'
 import {
   MAX_COUNCIL_MEMBERS,
+  MAX_DIRECTIVE_LENGTH,
   MAX_ROUNDS,
   MIN_COUNCIL_MEMBERS,
   MIN_ROUNDS,
@@ -67,6 +68,12 @@ const snapshotSchema = z.strictObject({
     .int()
     .min(MIN_ROUNDS, `Rounds must be between ${MIN_ROUNDS} and ${MAX_ROUNDS}.`)
     .max(MAX_ROUNDS, `Rounds must be between ${MIN_ROUNDS} and ${MAX_ROUNDS}.`),
+  // A3: optional because every snapshot frozen before the amendment omits it,
+  // and because a directive-less council omits it too. Nullable as well, so a
+  // hand-written document that spells the absence out still imports.
+  directive: nonBlank(MAX_DIRECTIVE_LENGTH, 'A council directive must not be blank.')
+    .nullable()
+    .optional(),
   members: z
     .array(snapshotMemberSchema)
     .min(MIN_COUNCIL_MEMBERS, `A council needs at least ${MIN_COUNCIL_MEMBERS} personas.`)
