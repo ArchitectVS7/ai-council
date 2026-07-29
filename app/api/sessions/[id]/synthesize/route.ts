@@ -1,17 +1,20 @@
 /**
- * `POST /api/sessions/[id]/synthesize` — The Chair writes the synthesis and the
- * session is marked completed (PRD §8).
+ * `POST /api/sessions/[id]/synthesize` — The Chair writes the synthesis,
+ * streamed, and the session is marked completed (PRD §8).
  *
  * No request body: the Chair, the round, and the transcript slot are all
- * derived server-side.
+ * derived server-side. A failed synthesis leaves the session active, and the
+ * session row on the terminal `turn` event is what the client should believe
+ * about its status.
  */
-import { badRequest, serverError, turnFailureResponse } from '@/lib/api/http'
+import { badRequest, serverError } from '@/lib/api/http'
 import { sessionIdSchema } from '@/lib/api/schemas'
-import { synthesizeSession } from '@/lib/session/turns'
+import { turnStreamResponse } from '@/lib/api/turn-stream'
+import { synthesizeSessionStream } from '@/lib/session/turns'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
 
@@ -20,14 +23,12 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       return badRequest('Invalid session id.', parsed.error.issues)
     }
 
-    const result = await synthesizeSession(parsed.data)
-    if (!result.ok) {
-      return turnFailureResponse(result)
-    }
-
-    // A failed synthesis leaves the session active; the returned session row is
-    // what the client should believe about its status.
-    return Response.json(result)
+    const controller = new AbortController()
+    return await turnStreamResponse(
+      synthesizeSessionStream(parsed.data, controller.signal),
+      request.signal,
+      () => controller.abort(),
+    )
   } catch (error) {
     return serverError(error)
   }

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
 import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
+import { encodeServerEvent } from '@/lib/sse'
 
 import Chamber from './chamber'
 
@@ -85,6 +86,109 @@ function json(body: unknown, status = 200): Response {
 }
 
 const COMPLETE_TURN = { ok: true, turn: { id: 'turn-c', seq: 2, status: 'complete' } }
+
+const encoder = new TextEncoder()
+
+/** The acceptance frame the server sends before the first token (T-030). */
+const ACCEPTED = encodeServerEvent('accepted', {
+  type: 'accepted',
+  seq: 2,
+  round: 1,
+  kind: 'persona',
+  speakerName: 'Skeptic',
+})
+
+function deltaFrame(text: string): string {
+  return encodeServerEvent('delta', { type: 'delta', text })
+}
+
+function turnFrame(result: unknown): string {
+  return encodeServerEvent('turn', { type: 'turn', result })
+}
+
+/**
+ * A `text/event-stream` response, built by hand.
+ *
+ * jsdom has no dependable `ReadableStream`, so the reader is a queue — but the
+ * bytes still go through the real parser in `lib/sse.ts`, so the wire format is
+ * genuinely exercised rather than mocked away.
+ */
+function sseResponse(frames: string[]): Response {
+  let index = 0
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        read: async () =>
+          index < frames.length
+            ? { done: false, value: encoder.encode(frames[index++]) }
+            : { done: true, value: undefined },
+        releaseLock: () => {},
+      }),
+    },
+  } as unknown as Response
+}
+
+/** The default stream: one acceptance, one delta, and the stored turn. */
+function streamOf(result: unknown = COMPLETE_TURN): Response {
+  return sseResponse([ACCEPTED, deltaFrame('The build is green.'), turnFrame(result)])
+}
+
+/**
+ * A stream the test drives frame by frame, and which rejects the read in flight
+ * the moment its request signal aborts — as a real `fetch` body does.
+ */
+function controllableStream() {
+  const queued: { done: boolean; value?: Uint8Array }[] = []
+  const waiting: { resolve: (r: { done: boolean; value?: Uint8Array }) => void; reject: (e: Error) => void }[] =
+    []
+  let signal: AbortSignal | null = null
+
+  const deliver = (item: { done: boolean; value?: Uint8Array }) => {
+    const next = waiting.shift()
+    if (next) next.resolve(item)
+    else queued.push(item)
+  }
+
+  const abortError = () => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
+
+  const response = {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        read: () => {
+          const ready = queued.shift()
+          if (ready) return Promise.resolve(ready)
+          return new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
+            if (signal?.aborted) {
+              reject(abortError())
+              return
+            }
+            waiting.push({ resolve, reject })
+            signal?.addEventListener('abort', () => reject(abortError()))
+          })
+        },
+        releaseLock: () => {},
+      }),
+    },
+  } as unknown as Response
+
+  return {
+    /** Hands the reader the request's signal so an abort can reject a pending read. */
+    attach(init: RequestInit | undefined) {
+      signal = init?.signal ?? null
+      return response
+    },
+    push(frame: string) {
+      deliver({ done: false, value: encoder.encode(frame) })
+    },
+    close() {
+      deliver({ done: true, value: undefined })
+    },
+  }
+}
 
 /** Installs a `fetch` double and returns the spy so calls can be asserted. */
 function stubFetch(handler: (url: string, init?: RequestInit) => Promise<Response>) {
@@ -220,7 +324,7 @@ describe('chamber controls', () => {
     expect(button('Pause').disabled).toBe(false)
 
     fireEvent.click(button('Pause'))
-    releaseAdvance(json(COMPLETE_TURN))
+    releaseAdvance(streamOf())
 
     await waitFor(() => expect(button('Step').disabled).toBe(false))
     expect(button('Pause').disabled).toBe(true)
@@ -229,9 +333,7 @@ describe('chamber controls', () => {
   })
 
   it('steps once through advance and reloads', async () => {
-    const fetchSpy = stubFetch(async (url) =>
-      url.endsWith('/advance') ? json(COMPLETE_TURN) : json(fixture()),
-    )
+    const fetchSpy = stubFetch(async (url) => (url.endsWith('/advance') ? streamOf() : json(fixture())))
 
     render(<Chamber initialView={fixture()} />)
     fireEvent.click(button('Step'))
@@ -241,9 +343,7 @@ describe('chamber controls', () => {
   })
 
   it('posts to synthesize', async () => {
-    const fetchSpy = stubFetch(async (url) =>
-      url.endsWith('/synthesize') ? json(COMPLETE_TURN) : json(fixture()),
-    )
+    const fetchSpy = stubFetch(async (url) => (url.endsWith('/synthesize') ? streamOf() : json(fixture())))
 
     render(<Chamber initialView={fixture()} />)
     fireEvent.click(button('Synthesize'))
@@ -267,7 +367,7 @@ describe('chamber controls', () => {
 
   it('halts a run round on a failed turn and points at Retry', async () => {
     const failed = { ok: true, turn: { id: 'turn-c', seq: 2, status: 'failed' } }
-    stubFetch(async (url) => (url.endsWith('/advance') ? json(failed) : json(fixture())))
+    stubFetch(async (url) => (url.endsWith('/advance') ? streamOf(failed) : json(fixture())))
 
     render(<Chamber initialView={fixture()} />)
     fireEvent.click(button('Run round'))
@@ -293,6 +393,93 @@ describe('chamber controls', () => {
     expect(screen.getByTestId('turn-counter').textContent).toBe('60 / 60')
     expect(button('Step').disabled).toBe(true)
     expect(button('Synthesize').disabled).toBe(true)
+  })
+})
+
+describe('chamber streaming (T-030)', () => {
+  it('renders tokens as they arrive, then replaces them with the stored transcript', async () => {
+    const stream = controllableStream()
+    const reloaded = fixture({
+      turns: [turn({ seq: 0, speakerName: 'Skeptic', content: 'The build is green.' })],
+    })
+    const fetchSpy = stubFetch(async (url, init) =>
+      url.endsWith('/advance') ? stream.attach(init) : json(reloaded),
+    )
+
+    render(<Chamber initialView={fixture({ turns: [] })} />)
+    fireEvent.click(button('Step'))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+
+    stream.push(ACCEPTED)
+    stream.push(deltaFrame('The build '))
+    stream.push(deltaFrame('is green.'))
+
+    // The partial turn is on screen, attributed, before anything is stored.
+    await waitFor(() =>
+      expect(screen.getByTestId('streaming-turn').textContent).toContain('The build is green.'),
+    )
+    expect(screen.getByTestId('streaming-turn').textContent).toContain('Skeptic')
+    expect(screen.getByTestId('streaming-turn').getAttribute('aria-live')).toBe('polite')
+    // It is not a transcript entry: nothing has been persisted yet.
+    expect(screen.queryByTestId('turn-0')).toBeNull()
+
+    stream.push(turnFrame(COMPLETE_TURN))
+    stream.close()
+
+    // …and it vanishes the moment the authoritative refetch lands.
+    await waitFor(() => expect(screen.queryByTestId('streaming-turn')).toBeNull())
+    expect(fetchSpy.mock.calls[1][0]).toBe(`/api/sessions/${SESSION_ID}`)
+    expect(within(screen.getByTestId('turn-0')).getByText('The build is green.')).toBeTruthy()
+  })
+
+  it('lets Pause abort the stream in flight and still reloads the stored turn', async () => {
+    const stream = controllableStream()
+    const fetchSpy = stubFetch(async (url, init) =>
+      url.endsWith('/advance') ? stream.attach(init) : json(fixture()),
+    )
+
+    render(<Chamber initialView={fixture({ turns: [] })} />)
+    fireEvent.click(button('Run round'))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+
+    stream.push(ACCEPTED)
+    stream.push(deltaFrame('Half a sen'))
+    await screen.findByTestId('streaming-turn')
+
+    // Pause is live during a single turn now, not only between turns.
+    expect(button('Pause').disabled).toBe(false)
+    fireEvent.click(button('Pause'))
+
+    // The request really was aborted, which is what makes the server record the
+    // turn as failed with the abort as its reason.
+    await waitFor(() => expect((fetchSpy.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true))
+    // The abort is not an error the convener has to read about…
+    await waitFor(() => expect(button('Step').disabled).toBe(false))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByTestId('streaming-turn')).toBeNull()
+    // …but the session is reloaded so the stored failed turn shows up.
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy.mock.calls[1][0]).toBe(`/api/sessions/${SESSION_ID}`)
+  })
+
+  it('surfaces a mid-stream server error verbatim rather than pretending a turn landed', async () => {
+    const fetchSpy = stubFetch(async (url) =>
+      url.endsWith('/advance')
+        ? sseResponse([
+            ACCEPTED,
+            deltaFrame('Half a sen'),
+            encodeServerEvent('error', { error: 'The session vanished mid-turn.' }),
+          ])
+        : json(fixture()),
+    )
+
+    render(<Chamber initialView={fixture({ turns: [] })} />)
+    fireEvent.click(button('Step'))
+
+    expect((await screen.findByRole('alert')).textContent).toBe('The session vanished mid-turn.')
+    // No refetch: nothing was reported as stored.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('streaming-turn')).toBeNull()
   })
 })
 

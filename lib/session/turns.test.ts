@@ -6,6 +6,11 @@
  * behind a thin wrapper that lets a test inject a provider error or hold a call
  * open. `fetch` is stubbed to throw so a regression that reaches a real provider
  * fails the suite instead of hanging.
+ *
+ * Extended for T-030: advance and synthesize are streams now, so most of the
+ * suite reads their terminal event through `collect` and the streaming rules
+ * themselves — chunk accumulation, write-once persistence, mid-stream failure
+ * and abort — get their own describes at the foot of the file.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,12 +25,15 @@ import { generate, type GenerateOptions } from '@/lib/llm'
 import { CHAIR_PERSONA, CHAIR_PERSONA_NAME } from '@/lib/seed-data'
 
 import {
+  ABORTED_BY_CONVENER,
   addInterjection,
-  advanceSession,
+  advanceSessionStream,
   regenerateLastTurn,
   reopenSession,
   retryLastTurn,
-  synthesizeSession,
+  synthesizeSessionStream,
+  type TurnResult,
+  type TurnStreamEvent,
 } from './turns'
 
 type FakeSession = {
@@ -124,23 +132,74 @@ const provider = vi.hoisted(() => ({
   nextError: null as Error | null,
   /** Awaited before every `generate` call, so a test can hold the lock open. */
   gate: null as Promise<void> | null,
+  /** Thrown *after* this many deltas — an outage half-way through a stream. */
+  errorAfterDeltas: null as number | null,
+  midStreamError: null as Error | null,
+  /** Aborts `controller` after this many deltas — the convener pressing Pause. */
+  abortAfterDeltas: null as number | null,
+  controller: null as AbortController | null,
 }))
 
+/**
+ * The provider double.
+ *
+ * Both entry points are wrapped, and `generateStream` is built on the mocked
+ * `generate`, for two reasons: `vi.mock` replaces exports only for *importers*,
+ * so the real `generate` inside `lib/llm.ts` would ignore these knobs entirely;
+ * and routing every call through one spy keeps `vi.mocked(generate).mock.calls`
+ * a faithful, ordered record of what the provider was asked for, whichever entry
+ * point the session service used.
+ */
 vi.mock('@/lib/llm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/llm')>()
+
+  // The second argument is the resolved model (PRD Amendment A1); it is
+  // forwarded rather than dropped so a test can assert what the provider was
+  // actually asked for.
+  const generate = vi.fn(async (options: GenerateOptions, model?: string | null) => {
+    if (provider.gate) await provider.gate
+    if (provider.nextError) {
+      const error = provider.nextError
+      provider.nextError = null
+      throw error
+    }
+    return actual.generate(options, model)
+  })
+
   return {
     ...actual,
-    // The second argument is the resolved model (PRD Amendment A1); it is
-    // forwarded rather than dropped so a test can assert what the provider was
-    // actually asked for.
-    generate: vi.fn(async (options: GenerateOptions, model?: string | null) => {
-      if (provider.gate) await provider.gate
-      if (provider.nextError) {
-        const error = provider.nextError
-        provider.nextError = null
-        throw error
+    generate,
+    generateStream: vi.fn(async function* (
+      options: GenerateOptions,
+      model?: string | null,
+      signal?: AbortSignal,
+    ) {
+      const result = await generate(options, model)
+
+      // Three slices, so "the deltas concatenate to the stored content" is a
+      // real assertion rather than a one-chunk tautology.
+      const size = Math.max(1, Math.ceil(result.text.length / 3))
+      const pieces: string[] = []
+      for (let i = 0; i < result.text.length; i += size) pieces.push(result.text.slice(i, i + size))
+
+      let emitted = 0
+      for (const text of pieces) {
+        signal?.throwIfAborted()
+        yield { type: 'delta' as const, text }
+        emitted += 1
+
+        if (provider.abortAfterDeltas === emitted) {
+          provider.controller?.abort()
+          signal?.throwIfAborted()
+        }
+        if (provider.errorAfterDeltas === emitted) {
+          const error = provider.midStreamError ?? new Error('The provider stream broke.')
+          provider.midStreamError = null
+          provider.errorAfterDeltas = null
+          throw error
+        }
       }
-      return actual.generate(options, model)
+      yield { type: 'done' as const, result }
     }),
   }
 })
@@ -213,6 +272,49 @@ function storedTurns(id: string): FakeTurn[] {
   return db.turns.filter((t) => t.sessionId === id) as unknown as FakeTurn[]
 }
 
+/**
+ * Drains a turn stream into the three things a test ever asks about.
+ *
+ * The terminal event is the result: `refused` (nothing was written) or `turn`
+ * (the row that was stored, however it went). Anything else is a bug in the
+ * service, so it throws rather than being reported as an empty success.
+ */
+async function collect(stream: AsyncGenerator<TurnStreamEvent>): Promise<{
+  events: TurnStreamEvent[]
+  deltas: string[]
+  result: TurnResult
+}> {
+  const events: TurnStreamEvent[] = []
+  for await (const event of stream) events.push(event)
+
+  const deltas = events
+    .filter((e): e is Extract<TurnStreamEvent, { type: 'delta' }> => e.type === 'delta')
+    .map((e) => e.text)
+
+  const terminal = events[events.length - 1]
+  if (terminal === undefined) throw new Error('The turn stream yielded no events at all.')
+  if (terminal.type === 'refused') {
+    return { events, deltas, result: { ok: false, reason: terminal.reason, message: terminal.message } }
+  }
+  if (terminal.type === 'turn') return { events, deltas, result: terminal.result }
+  throw new Error(`The turn stream ended on a "${terminal.type}" event.`)
+}
+
+/**
+ * The streamed entry points, read as a single result.
+ *
+ * Most of this suite is about the rules of the loop, not about streaming, so it
+ * reads the terminal event and moves on. The streaming-specific behaviour has
+ * its own describe below, which consumes the events one at a time.
+ */
+async function advanceSession(sessionId: string, signal?: AbortSignal): Promise<TurnResult> {
+  return (await collect(advanceSessionStream(sessionId, signal))).result
+}
+
+async function synthesizeSession(sessionId: string, signal?: AbortSignal): Promise<TurnResult> {
+  return (await collect(synthesizeSessionStream(sessionId, signal))).result
+}
+
 /** Narrows a result to its success shape with a readable failure message. */
 function expectOk(result: Awaited<ReturnType<typeof advanceSession>>) {
   if (!result.ok) throw new Error(`expected success, got ${result.reason}: ${result.message}`)
@@ -241,6 +343,10 @@ beforeEach(() => {
   db.turnIds = 0
   provider.nextError = null
   provider.gate = null
+  provider.errorAfterDeltas = null
+  provider.midStreamError = null
+  provider.abortAfterDeltas = null
+  provider.controller = null
   vi.clearAllMocks()
   vi.stubEnv('LLM_PROVIDER', 'mock')
   // Blank so `getModel()` falls back to the provider default regardless of the
@@ -952,5 +1058,252 @@ describe('reopenSession', () => {
     expect(expectSessionRefused(await reopenSession('00000000-0000-4000-8000-999999999994')).reason).toBe(
       'invalid-session',
     )
+  })
+})
+
+/**
+ * T-030: the streaming contract itself — what the events say, when the row is
+ * written, and what is recorded when a stream does not finish.
+ */
+describe('streaming a turn', () => {
+  it('announces the speaker before a single token arrives', async () => {
+    const session = createSession()
+
+    const { events } = await collect(advanceSessionStream(session.id))
+
+    expect(events[0]).toEqual({
+      type: 'accepted',
+      seq: 0,
+      round: 1,
+      kind: 'persona',
+      speakerName: 'The Pragmatist',
+    })
+    expect(events[events.length - 1].type).toBe('turn')
+  })
+
+  it('yields chunks that accumulate to exactly the stored content', async () => {
+    const session = createSession()
+
+    const { deltas, result } = await collect(advanceSessionStream(session.id))
+
+    expect(deltas.length).toBeGreaterThan(1)
+    expect(deltas.join('')).toBe(expectOk(result).turn.content)
+    expect(storedTurns(session.id)[0].content).toBe(deltas.join(''))
+  })
+
+  it('does the same for the Chair synthesis', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+
+    const { events, deltas, result } = await collect(synthesizeSessionStream(session.id))
+
+    expect(events[0]).toMatchObject({ type: 'accepted', kind: 'synthesis', speakerName: CHAIR_PERSONA_NAME })
+    expect(deltas.length).toBeGreaterThan(1)
+    expect(deltas.join('')).toBe(expectOk(result).turn.content)
+    expect(expectOk(result).session.status).toBe('completed')
+  })
+
+  it('persists the turn exactly once, and not before the stream has ended', async () => {
+    const session = createSession()
+    let deltasSeen = 0
+
+    for await (const event of advanceSessionStream(session.id)) {
+      if (event.type === 'delta') {
+        deltasSeen += 1
+        // Nothing is written while tokens are still arriving: a partial row
+        // could otherwise be read as a complete turn.
+        expect(storedTurns(session.id)).toHaveLength(0)
+      }
+    }
+
+    expect(deltasSeen).toBeGreaterThan(1)
+    expect(storedTurns(session.id)).toHaveLength(1)
+  })
+
+  it('releases the lock once the stream ends', async () => {
+    const session = createSession()
+    await collect(advanceSessionStream(session.id))
+
+    expect(expectOk(await advanceSession(session.id)).turn.seq).toBe(1)
+  })
+})
+
+describe('a provider failure mid-stream (T-030)', () => {
+  const OUTAGE = 'Anthropic request failed (529): {"type":"overloaded_error"}'
+
+  it('stores a failed turn, discards the partial text, and keeps the error verbatim', async () => {
+    const session = createSession()
+    provider.errorAfterDeltas = 2
+    provider.midStreamError = new Error(OUTAGE)
+
+    const { deltas, result } = await collect(advanceSessionStream(session.id))
+
+    // The convener saw text arrive…
+    expect(deltas).toHaveLength(2)
+    expect(deltas.join('').length).toBeGreaterThan(0)
+    // …and none of it was kept.
+    const turn = expectOk(result).turn
+    expect(turn.status).toBe('failed')
+    expect(turn.content).toBe('')
+    expect(turn.error).toBe(OUTAGE)
+    expect(turn.promptTokens).toBeNull()
+    // Exactly one row, and no `complete` row was ever written.
+    expect(storedTurns(session.id)).toHaveLength(1)
+    expect(storedTurns(session.id).filter((t) => t.status === 'complete')).toHaveLength(0)
+    // The attempt still counts toward the cap.
+    expect(storedSession(session.id).turnCursor).toBe(1)
+  })
+
+  it('leaves a broken synthesis stream on an active session for retry-last', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    provider.errorAfterDeltas = 1
+    provider.midStreamError = new Error(OUTAGE)
+
+    const failed = expectOk(await synthesizeSession(session.id))
+
+    expect(failed.turn).toMatchObject({ kind: 'synthesis', status: 'failed', content: '' })
+    expect(storedSession(session.id).status).toBe('active')
+    expect(storedSession(session.id).completedAt).toBeNull()
+
+    const retried = expectOk(await retryLastTurn(session.id))
+    expect(retried.turn).toMatchObject({ kind: 'synthesis', status: 'complete' })
+    expect(retried.session.status).toBe('completed')
+  })
+})
+
+describe('aborting a stream (T-030)', () => {
+  it('is the literal reason recorded on the turn', () => {
+    expect(ABORTED_BY_CONVENER).toBe('aborted by convener')
+  })
+
+  it('records a failed turn naming the abort, and completes without throwing', async () => {
+    const session = createSession()
+    const controller = new AbortController()
+    provider.controller = controller
+    provider.abortAfterDeltas = 1
+
+    const { deltas, result } = await collect(advanceSessionStream(session.id, controller.signal))
+
+    expect(deltas).toHaveLength(1)
+    const turn = expectOk(result).turn
+    expect(turn.status).toBe('failed')
+    expect(turn.error).toBe(ABORTED_BY_CONVENER)
+    expect(turn.content).toBe('')
+    expect(storedTurns(session.id)).toHaveLength(1)
+    // The abort is not mistaken for a provider outage message.
+    expect(storedTurns(session.id)[0].error).toBe(ABORTED_BY_CONVENER)
+  })
+
+  it('does the same for a synthesis, leaving the session active', async () => {
+    const session = createSession()
+    await advanceSession(session.id)
+    const controller = new AbortController()
+    provider.controller = controller
+    provider.abortAfterDeltas = 1
+
+    const result = expectOk(await synthesizeSession(session.id, controller.signal))
+
+    expect(result.turn).toMatchObject({ kind: 'synthesis', status: 'failed', error: ABORTED_BY_CONVENER })
+    expect(storedSession(session.id).status).toBe('active')
+  })
+
+  it('releases the lock, so retry-last can repair the aborted turn', async () => {
+    const session = createSession()
+    const controller = new AbortController()
+    provider.controller = controller
+    provider.abortAfterDeltas = 1
+    await advanceSession(session.id, controller.signal)
+
+    provider.abortAfterDeltas = null
+    provider.controller = null
+    const retried = expectOk(await retryLastTurn(session.id))
+
+    expect(retried.turn).toMatchObject({ seq: 0, status: 'complete', error: null })
+    expect(retried.turn.content.length).toBeGreaterThan(0)
+  })
+})
+
+describe('a refused stream (T-030)', () => {
+  /** Every refusal must arrive as the first and only event, having written nothing. */
+  async function expectRefusalOnly(stream: AsyncGenerator<TurnStreamEvent>, sessionId: string | null) {
+    const { events, result } = await collect(stream)
+
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('refused')
+    if (sessionId !== null) {
+      expect(storedTurns(sessionId)).toHaveLength(0)
+    }
+    return expectRefused(result)
+  }
+
+  it('refuses a completed session without bumping the cap counter', async () => {
+    const session = createSession({ status: 'completed', turnCursor: 4 })
+
+    const refused = await expectRefusalOnly(advanceSessionStream(session.id), session.id)
+
+    expect(refused.reason).toBe('not-active')
+    expect(storedSession(session.id).turnCursor).toBe(4)
+  })
+
+  it('refuses at the cap without bumping it further', async () => {
+    const session = createSession({ turnCursor: 60 })
+
+    const refused = await expectRefusalOnly(advanceSessionStream(session.id), session.id)
+
+    expect(refused.reason).toBe('cap-reached')
+    expect(storedSession(session.id).turnCursor).toBe(60)
+  })
+
+  it('refuses an unknown session id', async () => {
+    const refused = await expectRefusalOnly(
+      advanceSessionStream('00000000-0000-4000-8000-999999999993'),
+      null,
+    )
+
+    expect(refused.reason).toBe('invalid-session')
+  })
+
+  it('refuses a synthesis before any persona has spoken', async () => {
+    const session = createSession()
+
+    const refused = await expectRefusalOnly(synthesizeSessionStream(session.id), session.id)
+
+    expect(refused.reason).toBe('nothing-to-synthesize')
+  })
+
+  it('refuses a second stream while the first is open, and unlocks when it is closed', async () => {
+    const session = createSession()
+    let openGate = (): void => {}
+    provider.gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+
+    const held = advanceSessionStream(session.id)
+    // Pull the first event so the lock is definitely taken.
+    expect((await held.next()).value).toMatchObject({ type: 'accepted' })
+
+    const refused = await expectRefusalOnly(advanceSessionStream(session.id), session.id)
+    expect(refused.reason).toBe('locked')
+
+    openGate()
+    await collect(held)
+    expect(storedTurns(session.id)).toHaveLength(1)
+
+    // …and the lock is free again.
+    provider.gate = null
+    expect(expectOk(await advanceSession(session.id)).turn.seq).toBe(1)
+  })
+
+  it('leaves the session unlocked when the consumer closes a refused stream early', async () => {
+    const session = createSession({ status: 'completed' })
+    const stream = advanceSessionStream(session.id)
+
+    expect((await stream.next()).value).toMatchObject({ type: 'refused' })
+    // What `turnStreamResponse` does before answering with the status code.
+    await stream.return(undefined)
+
+    // A second stream is refused for the session's status, never for the lock.
+    expect(expectRefused(await advanceSession(session.id)).reason).toBe('not-active')
   })
 })

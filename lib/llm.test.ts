@@ -4,11 +4,10 @@ import {
   buildAnthropicRequest,
   buildOpenAIRequest,
   generate,
+  generateStream,
   getModel,
   getProviderName,
   mockGenerate,
-  parseAnthropicResponse,
-  parseOpenAIResponse,
   type GenerateOptions,
   type GenerateResult,
 } from './llm'
@@ -114,19 +113,37 @@ describe('getModel', () => {
   })
 })
 
+/** One SSE frame, as a provider writes it. */
+function frame(event: string | null, data: unknown): string {
+  const payload = typeof data === 'string' ? data : JSON.stringify(data)
+  return `${event === null ? '' : `event: ${event}\n`}data: ${payload}\n\n`
+}
+
+/** The Anthropic stream that produces "A measured opening." with 10/5 tokens. */
+const ANTHROPIC_STREAM = [
+  frame('message_start', { type: 'message_start', message: { usage: { input_tokens: 10 } } }),
+  frame('content_block_delta', {
+    type: 'content_block_delta',
+    delta: { type: 'text_delta', text: 'A measured ' },
+  }),
+  frame('content_block_delta', { type: 'content_block_delta', delta: { type: 'text_delta', text: 'opening.' } }),
+  frame('message_delta', { type: 'message_delta', usage: { output_tokens: 5 } }),
+  frame('message_stop', { type: 'message_stop' }),
+].join('')
+
+const OPENAI_STREAM = [
+  frame(null, { choices: [{ delta: { content: 'A measured ' } }] }),
+  frame(null, { choices: [{ delta: { content: 'opening.' } }] }),
+  frame(null, { choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } }),
+  frame(null, '[DONE]'),
+].join('')
+
 describe('generate honours a per-call model override (Amendment A1)', () => {
   /** Captures the request body a provider call would have sent. */
   function stubAnthropic() {
     const spy = vi.fn(async (_url: string, init: RequestInit) => {
       void init
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          content: [{ type: 'text', text: 'A measured opening.' }],
-          usage: { input_tokens: 10, output_tokens: 5 },
-        }),
-      } as unknown as Response
+      return new Response(ANTHROPIC_STREAM, { status: 200 })
     })
     vi.stubGlobal('fetch', spy)
     return spy
@@ -301,46 +318,191 @@ describe('request builders', () => {
   })
 })
 
-describe('response parsers', () => {
-  it('reads text and usage from an Anthropic payload', () => {
-    const result = parseAnthropicResponse({
-      content: [
-        { type: 'thinking', thinking: 'ignored' },
-        { type: 'text', text: 'A measured opening.' },
-      ],
-      usage: { input_tokens: 120, output_tokens: 34 },
+/** Drains a stream into its deltas and its terminal result. */
+async function drain(stream: AsyncGenerator<{ type: string }>): Promise<{
+  deltas: string[]
+  result: GenerateResult | null
+}> {
+  const deltas: string[] = []
+  let result: GenerateResult | null = null
+  for await (const chunk of stream as AsyncGenerator<
+    { type: 'delta'; text: string } | { type: 'done'; result: GenerateResult }
+  >) {
+    if (chunk.type === 'delta') deltas.push(chunk.text)
+    else result = chunk.result
+  }
+  return { deltas, result }
+}
+
+describe('generateStream with the mock provider', () => {
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'mock'
+  })
+
+  it('accumulates, chunk by chunk, to exactly the non-streaming output', async () => {
+    const whole = await generate(OPTIONS)
+    const { deltas, result } = await drain(generateStream(OPTIONS))
+
+    // The point of the acceptance criterion: more than one chunk, and their
+    // concatenation is byte-identical to the whole-text result.
+    expect(deltas.length).toBeGreaterThan(1)
+    expect(deltas.join('')).toBe(mockGenerate(OPTIONS).text)
+    expect(deltas.join('')).toBe(whole.text)
+    expect(result).toEqual(whole)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('is deterministic: two streams of the same options yield identical chunks', async () => {
+    const first = await drain(generateStream(OPTIONS))
+    const second = await drain(generateStream({ ...OPTIONS }))
+
+    expect(first.deltas).toEqual(second.deltas)
+    expect(first.result).toEqual(second.result)
+  })
+
+  it('throws immediately on an already-aborted signal, emitting nothing', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(drain(generateStream(OPTIONS, null, controller.signal))).rejects.toThrow()
+  })
+
+  it('stops mid-stream when the signal aborts', async () => {
+    const controller = new AbortController()
+    const stream = generateStream(OPTIONS, null, controller.signal)
+
+    const first = await stream.next()
+    expect(first.value).toMatchObject({ type: 'delta' })
+
+    controller.abort()
+    await expect(stream.next()).rejects.toThrow()
+  })
+})
+
+describe('generateStream against Anthropic', () => {
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'anthropic'
+    process.env.ANTHROPIC_API_KEY = 'sk-test'
+  })
+
+  function stub(body: string, status = 200) {
+    const spy = vi.fn(async () => new Response(body, { status }))
+    vi.stubGlobal('fetch', spy)
+    return spy
+  }
+
+  it('asks for a stream and reads text and usage out of it', async () => {
+    const spy = stub(ANTHROPIC_STREAM)
+
+    const { deltas, result } = await drain(generateStream(OPTIONS, 'claude-sonnet-5'))
+
+    const body = JSON.parse(String((spy.mock.calls[0] as unknown as [string, RequestInit])[1].body))
+    expect(body.stream).toBe(true)
+    expect(body.model).toBe('claude-sonnet-5')
+    expect(deltas).toEqual(['A measured ', 'opening.'])
+    expect(result).toEqual({ text: 'A measured opening.', promptTokens: 10, completionTokens: 5 })
+  })
+
+  it('feeds `generate`, so one request shape serves both callers', async () => {
+    stub(ANTHROPIC_STREAM)
+
+    expect(await generate(OPTIONS)).toEqual({
+      text: 'A measured opening.',
+      promptTokens: 10,
+      completionTokens: 5,
     })
-    expect(result).toEqual({ text: 'A measured opening.', promptTokens: 120, completionTokens: 34 })
   })
 
-  it('throws on an Anthropic payload with no text block', () => {
-    expect(() =>
-      parseAnthropicResponse({ content: [{ type: 'thinking' }], usage: { input_tokens: 1, output_tokens: 1 } }),
-    ).toThrowError(/no text block/)
+  it('ignores keepalive pings', async () => {
+    stub(`event: ping\ndata: {"type":"ping"}\n\n${ANTHROPIC_STREAM}`)
+
+    expect((await drain(generateStream(OPTIONS))).result?.text).toBe('A measured opening.')
   })
 
-  it('throws on an Anthropic payload with no usage', () => {
-    expect(() => parseAnthropicResponse({ content: [{ type: 'text', text: 'hi' }] })).toThrowError(/malformed/)
+  it('throws with the error frame verbatim', async () => {
+    stub(
+      frame('message_start', { type: 'message_start', message: { usage: { input_tokens: 10 } } }) +
+        frame('error', { type: 'error', error: { type: 'overloaded_error' } }),
+    )
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/overloaded_error/)
   })
 
-  it('reads text and usage from an OpenAI payload', () => {
-    const result = parseOpenAIResponse({
-      choices: [{ message: { content: 'A measured opening.' } }],
-      usage: { prompt_tokens: 90, completion_tokens: 21 },
-    })
-    expect(result).toEqual({ text: 'A measured opening.', promptTokens: 90, completionTokens: 21 })
+  it('throws on a non-2xx with the status and the body, in the stored wording', async () => {
+    stub('{"type":"overloaded_error"}', 529)
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(
+      'Anthropic request failed (529): {"type":"overloaded_error"}',
+    )
   })
 
-  it('throws on an OpenAI payload with null content instead of defaulting to empty text', () => {
-    expect(() =>
-      parseOpenAIResponse({
-        choices: [{ message: { content: null } }],
-        usage: { prompt_tokens: 1, completion_tokens: 1 },
+  it('throws rather than record a turn with unknown token counts', async () => {
+    stub(
+      frame('content_block_delta', {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text: 'no usage here' },
       }),
-    ).toThrowError(/malformed/)
+    )
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/usage totals/)
   })
 
-  it('throws on an OpenAI payload with no usage instead of defaulting to zero', () => {
-    expect(() => parseOpenAIResponse({ choices: [{ message: { content: 'hi' } }] })).toThrowError(/malformed/)
+  it('throws on a frame it cannot read instead of skipping it', async () => {
+    stub(frame('message_start', { type: 'message_start', message: { usage: {} } }))
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/malformed/)
+  })
+})
+
+describe('generateStream against OpenAI', () => {
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'openai'
+    process.env.OPENAI_API_KEY = 'sk-test'
+  })
+
+  function stub(body: string, status = 200) {
+    const spy = vi.fn(async () => new Response(body, { status }))
+    vi.stubGlobal('fetch', spy)
+    return spy
+  }
+
+  it('asks for a stream with usage and reads both out of it', async () => {
+    const spy = stub(OPENAI_STREAM)
+
+    const { deltas, result } = await drain(generateStream(OPTIONS))
+
+    const body = JSON.parse(String((spy.mock.calls[0] as unknown as [string, RequestInit])[1].body))
+    expect(body.stream).toBe(true)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    expect(deltas).toEqual(['A measured ', 'opening.'])
+    expect(result).toEqual({ text: 'A measured opening.', promptTokens: 10, completionTokens: 5 })
+  })
+
+  it('stops at [DONE] and ignores anything after it', async () => {
+    stub(`${OPENAI_STREAM}${frame(null, { choices: [{ delta: { content: ' ignored' } }] })}`)
+
+    expect((await drain(generateStream(OPTIONS))).result?.text).toBe('A measured opening.')
+  })
+
+  it('feeds `generate` too', async () => {
+    stub(OPENAI_STREAM)
+
+    expect(await generate(OPTIONS)).toEqual({
+      text: 'A measured opening.',
+      promptTokens: 10,
+      completionTokens: 5,
+    })
+  })
+
+  it('throws on a non-2xx with the status and the body', async () => {
+    stub('rate limited', 429)
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError('OpenAI request failed (429): rate limited')
+  })
+
+  it('throws on a stream that carried no text', async () => {
+    stub(frame(null, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } }) + frame(null, '[DONE]'))
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/no text/)
   })
 })

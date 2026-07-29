@@ -24,12 +24,17 @@ import { useCallback, useRef, useState } from 'react'
 import { controlState, resultSeq } from '@/lib/chamber/controls'
 import { atRoundBoundary, runRound } from '@/lib/chamber/runner'
 import type { RunRoundResult, StepOutcome } from '@/lib/chamber/runner'
+import { requestTurnStream } from '@/lib/chamber/stream'
+import type { StreamingTurn } from '@/lib/chamber/stream'
 import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
 import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 import { MAX_GENERATED_TURNS } from '@/lib/council/scheduler'
 
+/** The two endpoints that stream their turn token by token (T-030). */
+type StreamAction = 'advance' | 'synthesize'
+
 /** The bodiless POST endpoints that answer with a turn (PRD §8). */
-type Action = 'advance' | 'synthesize' | 'retry-last' | 'regenerate-last'
+type Action = StreamAction | 'retry-last' | 'regenerate-last'
 
 /** One round trip, with the server's refusal text passed through unedited. */
 type Reply = { ok: true; data: unknown } | { ok: false; message: string }
@@ -63,9 +68,17 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
   const [copied, setCopied] = useState(false)
   /** The convener's in-progress note; cleared only once the server has stored it. */
   const [interjection, setInterjection] = useState('')
+  /**
+   * The turn currently arriving from the server, rendered below the transcript
+   * and dropped the moment the refetch lands. Display-only: the transcript
+   * itself is never patched from a delta (PRD §5.1).
+   */
+  const [streaming, setStreaming] = useState<StreamingTurn | null>(null)
   // A ref, not state: the running loop has to read the latest value between
   // steps, and a re-render is not what makes Pause take effect.
   const pauseRef = useRef(false)
+  /** Aborts the stream in flight; Pause uses it to stop a turn mid-sentence. */
+  const abortRef = useRef<AbortController | null>(null)
 
   const sessionId = view.session.id
   const snapshot = view.session.councilSnapshot
@@ -107,6 +120,54 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     [sessionId],
   )
 
+  /** The refetched view, reduced to what the round runner needs to know. */
+  const settle = useCallback(
+    async (turn: ChamberTurn): Promise<StepOutcome> => {
+      const fresh = await refresh()
+      return {
+        kind: 'turn',
+        failed: turn.status === 'failed',
+        atRoundBoundary: atRoundBoundary(fresh.turns, fresh.session.councilSnapshot.members.length),
+      }
+    },
+    [refresh],
+  )
+
+  /**
+   * Advance and synthesize, read as a stream: the tokens render as they arrive
+   * and the authoritative transcript still comes from the refetch afterwards.
+   *
+   * An abort also refetches, because the server persisted a `failed` turn with
+   * the abort as its reason and the convener needs its Retry button.
+   */
+  const postStream = useCallback(
+    async (action: StreamAction): Promise<StepOutcome> => {
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      let result
+      try {
+        result = await requestTurnStream(
+          `/api/sessions/${sessionId}/${action}`,
+          controller.signal,
+          (partial) => setStreaming(partial),
+        )
+      } finally {
+        abortRef.current = null
+        setStreaming(null)
+      }
+
+      // A refusal stored nothing, so there is nothing to reload.
+      if (result.kind === 'refused') return { kind: 'refused', message: result.message }
+      if (result.kind === 'aborted') {
+        await refresh()
+        return { kind: 'aborted' }
+      }
+      return settle(result.turn)
+    },
+    [sessionId, refresh, settle],
+  )
+
   /**
    * One turn-producing round trip: POST the action, then reload from the
    * server. A 200 with a `failed` turn is a stored provider error, not a
@@ -114,18 +175,14 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
    */
   const post = useCallback(
     async (action: Action): Promise<StepOutcome> => {
+      if (action === 'advance' || action === 'synthesize') return postStream(action)
+
       const reply = await request(action)
       if (!reply.ok) return { kind: 'refused', message: reply.message }
 
-      const body = reply.data as { turn: ChamberTurn }
-      const fresh = await refresh()
-      return {
-        kind: 'turn',
-        failed: body.turn.status === 'failed',
-        atRoundBoundary: atRoundBoundary(fresh.turns, fresh.session.councilSnapshot.members.length),
-      }
+      return settle((reply.data as { turn: ChamberTurn }).turn)
     },
-    [request, refresh],
+    [postStream, request, settle],
   )
 
   const runOnce = useCallback(
@@ -204,8 +261,12 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     }
   }, [post, snapshot.members.length])
 
+  // Pause now means two things at once: stop the loop before the next step, and
+  // abort the turn already in flight. The server records the aborted turn as
+  // `failed` with the abort as its reason (T-030).
   const onPause = useCallback(() => {
     pauseRef.current = true
+    abortRef.current?.abort()
   }, [])
 
   /** The single source of the exported document; both buttons go through it. */
@@ -326,7 +387,9 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
         <button
           type="button"
           className="rounded border border-slate-300 px-3 py-2 text-sm font-medium disabled:opacity-40"
-          disabled={!running}
+          // Live during a run *and* during a single Step, because Pause now
+          // aborts the stream in flight rather than only stopping the loop.
+          disabled={!running && streaming === null}
           onClick={onPause}
         >
           Pause
@@ -464,7 +527,30 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
         })}
       </ol>
 
-      {view.turns.length === 0 ? (
+      {/* The turn being spoken right now. It is not part of the transcript list
+          — nothing is stored yet — and it disappears the instant the refetch
+          lands, so the same turn is never on screen twice. */}
+      {streaming === null ? null : (
+        <section
+          aria-live="polite"
+          aria-label="Turn in progress"
+          data-testid="streaming-turn"
+          className="rounded border border-slate-200 border-l-4 bg-white p-4"
+          style={
+            colorOf(streaming.speakerName) === undefined
+              ? undefined
+              : { borderLeftColor: colorOf(streaming.speakerName) }
+          }
+        >
+          <p className="flex flex-wrap items-baseline gap-2 text-sm">
+            <span className="font-semibold text-slate-900">{streaming.speakerName}</span>
+            <span className="text-slate-500">Round {streaming.round}</span>
+          </p>
+          <p className="mt-2 whitespace-pre-wrap text-slate-800">{streaming.text}</p>
+        </section>
+      )}
+
+      {view.turns.length === 0 && streaming === null ? (
         <p className="text-sm text-slate-600">No turns yet. Press Step to hear the first persona.</p>
       ) : null}
 

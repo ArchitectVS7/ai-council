@@ -15,6 +15,12 @@ import 'server-only'
  * transcript slot is derived here from persisted state — the client is never
  * asked and is never believed.
  *
+ * Advance and synthesize are async *generators* (T-030): they emit a refusal,
+ * or an acceptance followed by the provider's tokens and finally the stored
+ * turn. Everything else answers with a plain `TurnResult`, because nothing else
+ * has anything to say while it works. `lib/api/turn-stream.ts` is what turns the
+ * event sequence into an SSE response; the rules of the loop stay here.
+ *
  * Snapshot rule (PRD §7): the roster comes from `session.councilSnapshot`.
  * Nothing here reads `councils` or `personas`.
  *
@@ -40,10 +46,10 @@ import {
   touchSession,
   updateTurnInPlace,
 } from '@/lib/db/repo'
-import { generate, getModel } from '@/lib/llm'
+import { generate, generateStream, getModel } from '@/lib/llm'
 import { CHAIR_PERSONA } from '@/lib/seed-data'
 
-import { withSessionLock } from './lock'
+import { acquireSessionLock, withSessionLock } from './lock'
 
 /**
  * Why a session action was refused. Each value maps to exactly one status code
@@ -68,10 +74,40 @@ export type TurnResult =
       ok: true
       turn: TurnRow
       session: SessionRow
-      /** Set by `advanceSession`: the session has run every round its snapshot planned. */
+      /** Set by `advanceSessionStream`: the session has run every round its snapshot planned. */
       plannedRoundsComplete?: boolean
     }
   | { ok: false; reason: TurnFailureReason; message: string }
+
+/**
+ * What a streamed generation tells its caller, in order (T-030).
+ *
+ * Exactly one of `refused` or `accepted` comes first and it decides the shape of
+ * the whole exchange: a `refused` stream ends there and the route answers with
+ * the PRD §8 status code for that reason, while an `accepted` stream is a 200
+ * `text/event-stream` in which a provider failure is *data* on the terminal
+ * `turn` event, never an HTTP error (PRD §5.4).
+ */
+export type TurnStreamEvent =
+  | { type: 'refused'; reason: TurnFailureReason; message: string }
+  | {
+      type: 'accepted'
+      seq: number
+      round: number
+      kind: 'persona' | 'synthesis'
+      speakerName: string
+    }
+  | { type: 'delta'; text: string }
+  | { type: 'turn'; result: Extract<TurnResult, { ok: true }> }
+
+/**
+ * The error recorded when the convener pauses a generation mid-stream.
+ *
+ * The partial text is discarded rather than stored: half a turn is not a turn,
+ * and the transcript must not carry text no persona finished saying. The turn is
+ * still written, `failed`, so Retry is right there in the chamber (PRD §5.4).
+ */
+export const ABORTED_BY_CONVENER = 'aborted by convener'
 
 /**
  * The result of an action that changes a session without writing a turn — only
@@ -88,17 +124,15 @@ type GeneratedFields = Pick<
   'content' | 'status' | 'error' | 'model' | 'promptTokens' | 'completionTokens'
 >
 
-const LOCKED: TurnResult = {
-  ok: false,
-  reason: 'locked',
-  message: 'A turn is already being generated for this session. Wait for it to finish.',
-}
+const LOCKED_MESSAGE = 'A turn is already being generated for this session. Wait for it to finish.'
+
+const LOCKED: TurnResult = { ok: false, reason: 'locked', message: LOCKED_MESSAGE }
 
 /** The scheduler's refusal reasons, renamed to this module's vocabulary. */
 function refusal(check: {
   reason: 'session-not-active' | 'awaiting-retry' | 'cap-reached'
   message: string
-}): TurnResult {
+}): { reason: TurnFailureReason; message: string } {
   const reason =
     check.reason === 'session-not-active'
       ? 'not-active'
@@ -107,7 +141,7 @@ function refusal(check: {
         : 'cap-reached'
   // The message is the scheduler's, unedited — it already names the 60-turn cap
   // and the session's actual status.
-  return { ok: false, reason, message: check.message }
+  return { reason, message: check.message }
 }
 
 type LoadedSession = { session: SessionRow; turns: TurnRow[]; state: SessionState }
@@ -195,105 +229,233 @@ async function runProvider(
   }
 }
 
-/**
- * Generate the next persona turn.
- *
- * The lock is taken before the read so two concurrent calls cannot derive the
- * same `seq`; the second caller gets `locked` and never touches the database.
- */
-export async function advanceSession(sessionId: string): Promise<TurnResult> {
-  const outcome = await withSessionLock(sessionId, async (): Promise<TurnResult> => {
-    const loaded = await loadSession(sessionId)
-    if (!loaded) return notFoundResult(sessionId)
-
-    const decision = nextSpeaker(loaded.state)
-    if (!decision.ok) return refusal(decision)
-
-    const speaker = loaded.state.snapshot.members[decision.memberIndex]
-    const built = buildTurnPrompt({
-      topic: loaded.session.topic,
-      snapshot: loaded.state.snapshot,
-      turns: loaded.state.turns,
-      speaker,
-      round: decision.round,
-      kind: decision.roundType,
-    })
-
-    // Reserve the cap slot before spending it. The neon-http driver has no
-    // interactive transactions, so these writes are sequential; counting first
-    // means a crash between them can only under-count the transcript, never let
-    // a session slip past the 60-turn cap.
-    const session = await bumpTurnCursor(sessionId)
-    const generated = await runProvider(built, loaded.session.model)
-    const turn = await insertTurn({
-      sessionId,
-      seq: decision.seq,
-      kind: 'persona',
-      speakerName: decision.speakerName,
-      round: decision.round,
-      ...generated,
-    })
-
-    return { ok: true, turn, session, plannedRoundsComplete: decision.plannedRoundsComplete }
-  })
-
-  return outcome.locked ? LOCKED : outcome.value
+/** Everything a turn needs once the guards have passed. */
+type TurnPlan = {
+  seq: number
+  round: number
+  kind: 'persona' | 'synthesis'
+  speakerName: string
+  built: { system: string; prompt: string; maxTokens: number; temperature: number }
+  /** Advance only: the session has run every round its snapshot planned. */
+  plannedRoundsComplete?: boolean
 }
 
 /**
- * The Chair produces the synthesis and the session is marked completed.
+ * Stream one turn from the provider and persist it exactly once (T-030).
+ *
+ * The shared tail of advance and synthesize, entered only after the guards have
+ * passed and the session lock is held. Four rules hold it together:
+ *
+ * 1. `insertTurn` is called **once**, after the stream has ended either way. No
+ *    partial row is written and no `complete` row can exist for a generation
+ *    that broke half-way through.
+ * 2. A mid-stream failure discards the accumulated text (`content: ''`) and
+ *    stores the provider's message verbatim, exactly as the non-streamed path
+ *    always did (PRD §5.4).
+ * 3. An abort is told apart from an outage by the *signal*, not by the error's
+ *    class — `DOMException`, `AbortError` and a provider wrapper's own error all
+ *    arrive here differently, but `signal.aborted` is unambiguous.
+ * 4. The generator must be driven to exhaustion by its consumer. Persistence
+ *    lives in the normal body, not in a `finally`, so abandoning it mid-stream
+ *    would skip the write — `lib/api/turn-stream.ts` therefore keeps draining
+ *    even after the client has disconnected.
+ */
+async function* streamTurn(
+  loaded: LoadedSession,
+  plan: TurnPlan,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<TurnStreamEvent> {
+  const sessionId = loaded.session.id
+  // Resolved before anything is written: an unreadable `LLM_PROVIDER` or a
+  // malformed stored model is operator misconfiguration and must surface as a
+  // 500, not as a persona's failed turn (R4).
+  const model = getModel(loaded.session.model)
+
+  yield {
+    type: 'accepted',
+    seq: plan.seq,
+    round: plan.round,
+    kind: plan.kind,
+    speakerName: plan.speakerName,
+  }
+
+  // Reserve the cap slot before spending it. The neon-http driver has no
+  // interactive transactions, so these writes are sequential; counting first
+  // means a crash between them can only under-count the transcript, never let
+  // a session slip past the 60-turn cap.
+  const session = await bumpTurnCursor(sessionId)
+
+  let generated: GeneratedFields
+  try {
+    let completion: { text: string; promptTokens: number; completionTokens: number } | null = null
+    for await (const chunk of generateStream(plan.built, model, signal)) {
+      if (chunk.type === 'delta') yield { type: 'delta', text: chunk.text }
+      else completion = chunk.result
+    }
+    if (completion === null) {
+      throw new Error('The provider stream ended without a completion event.')
+    }
+    generated = {
+      content: completion.text,
+      status: 'complete',
+      error: null,
+      model,
+      promptTokens: completion.promptTokens,
+      completionTokens: completion.completionTokens,
+    }
+  } catch (error) {
+    generated = {
+      content: '',
+      status: 'failed',
+      error: signal?.aborted === true ? ABORTED_BY_CONVENER : messageOf(error),
+      model,
+      promptTokens: null,
+      completionTokens: null,
+    }
+  }
+
+  const turn = await insertTurn({
+    sessionId,
+    seq: plan.seq,
+    kind: plan.kind,
+    speakerName: plan.speakerName,
+    round: plan.round,
+    ...generated,
+  })
+
+  // A synthesis that failed leaves the session active on purpose: retry-last
+  // is the way back, and a session must never be sealed on an error turn.
+  if (plan.kind === 'synthesis' && generated.status === 'complete') {
+    yield { type: 'turn', result: { ok: true, turn, session: await markSessionCompleted(sessionId) } }
+    return
+  }
+
+  yield {
+    type: 'turn',
+    result: { ok: true, turn, session, plannedRoundsComplete: plan.plannedRoundsComplete },
+  }
+}
+
+/**
+ * Generate the next persona turn, streaming its tokens as they arrive.
+ *
+ * The lock is taken before the read so two concurrent calls cannot derive the
+ * same `seq`; the second caller gets `locked` as its first and only event and
+ * never touches the database. It is released in `finally`, which a consumer's
+ * early `.return()` also runs — a refused stream leaves the session unlocked.
+ */
+export async function* advanceSessionStream(
+  sessionId: string,
+  signal?: AbortSignal,
+): AsyncGenerator<TurnStreamEvent> {
+  const release = acquireSessionLock(sessionId)
+  if (release === null) {
+    yield { type: 'refused', reason: 'locked', message: LOCKED_MESSAGE }
+    return
+  }
+
+  try {
+    const loaded = await loadSession(sessionId)
+    if (!loaded) {
+      yield { type: 'refused', reason: 'invalid-session', message: `Session ${sessionId} not found.` }
+      return
+    }
+
+    const decision = nextSpeaker(loaded.state)
+    if (!decision.ok) {
+      yield { type: 'refused', ...refusal(decision) }
+      return
+    }
+
+    const speaker = loaded.state.snapshot.members[decision.memberIndex]
+    yield* streamTurn(
+      loaded,
+      {
+        seq: decision.seq,
+        round: decision.round,
+        kind: 'persona',
+        speakerName: decision.speakerName,
+        built: buildTurnPrompt({
+          topic: loaded.session.topic,
+          snapshot: loaded.state.snapshot,
+          turns: loaded.state.turns,
+          speaker,
+          round: decision.round,
+          kind: decision.roundType,
+        }),
+        plannedRoundsComplete: decision.plannedRoundsComplete,
+      },
+      signal,
+    )
+  } finally {
+    release()
+  }
+}
+
+/**
+ * The Chair produces the synthesis, streamed, and the session is marked
+ * completed once it lands intact.
  *
  * The Chair is in no council's speaking order and therefore in no snapshot, so
  * its charter comes from the built-in constant (PRD §3) rather than a live
  * `personas` row — the snapshot rule forbids a session's output depending on an
  * editable table.
  */
-export async function synthesizeSession(sessionId: string): Promise<TurnResult> {
-  const outcome = await withSessionLock(sessionId, async (): Promise<TurnResult> => {
+export async function* synthesizeSessionStream(
+  sessionId: string,
+  signal?: AbortSignal,
+): AsyncGenerator<TurnStreamEvent> {
+  const release = acquireSessionLock(sessionId)
+  if (release === null) {
+    yield { type: 'refused', reason: 'locked', message: LOCKED_MESSAGE }
+    return
+  }
+
+  try {
     const loaded = await loadSession(sessionId)
-    if (!loaded) return notFoundResult(sessionId)
+    if (!loaded) {
+      yield { type: 'refused', reason: 'invalid-session', message: `Session ${sessionId} not found.` }
+      return
+    }
 
     const check = canGenerate(loaded.state)
-    if (!check.ok) return refusal(check)
+    if (!check.ok) {
+      yield { type: 'refused', ...refusal(check) }
+      return
+    }
 
     const hasSpoken = loaded.state.turns.some((t) => t.kind === 'persona' && t.status === 'complete')
     if (!hasSpoken) {
-      return {
-        ok: false,
+      yield {
+        type: 'refused',
         reason: 'nothing-to-synthesize',
         message: 'No persona has spoken yet; advance the session before synthesizing.',
       }
+      return
     }
 
     const round = currentRound(loaded.state)
-    const built = buildTurnPrompt({
-      topic: loaded.session.topic,
-      snapshot: loaded.state.snapshot,
-      turns: loaded.state.turns,
-      speaker: CHAIR_PERSONA,
-      round,
-      kind: 'synthesis',
-    })
-
-    const session = await bumpTurnCursor(sessionId)
-    const generated = await runProvider(built, loaded.session.model)
-    const turn = await insertTurn({
-      sessionId,
-      seq: nextTurnSeq(loaded.state.turns),
-      kind: 'synthesis',
-      speakerName: CHAIR_PERSONA.name,
-      round,
-      ...generated,
-    })
-
-    // A synthesis that failed leaves the session active on purpose: retry-last
-    // is the way back, and a session must never be sealed on an error turn.
-    if (generated.status !== 'complete') return { ok: true, turn, session }
-
-    return { ok: true, turn, session: await markSessionCompleted(sessionId) }
-  })
-
-  return outcome.locked ? LOCKED : outcome.value
+    yield* streamTurn(
+      loaded,
+      {
+        seq: nextTurnSeq(loaded.state.turns),
+        round,
+        kind: 'synthesis',
+        speakerName: CHAIR_PERSONA.name,
+        built: buildTurnPrompt({
+          topic: loaded.session.topic,
+          snapshot: loaded.state.snapshot,
+          turns: loaded.state.turns,
+          speaker: CHAIR_PERSONA,
+          round,
+          kind: 'synthesis',
+        }),
+      },
+      signal,
+    )
+  } finally {
+    release()
+  }
 }
 
 /**
@@ -393,7 +555,7 @@ export async function retryLastTurn(sessionId: string): Promise<TurnResult> {
     // refusal (inactive session, cap reached) still stands, and its message is
     // the scheduler's so the 60-turn wording is never duplicated here.
     const check = canGenerate(loaded.state)
-    if (!check.ok && check.reason !== 'awaiting-retry') return refusal(check)
+    if (!check.ok && check.reason !== 'awaiting-retry') return { ok: false, ...refusal(check) }
 
     return regenerateTurnInPlace(loaded, last)
   })
@@ -501,7 +663,7 @@ export async function regenerateLastTurn(sessionId: string): Promise<TurnResult>
     // `cap-reached` stand. The scheduler's wording (which names the 60-turn cap)
     // is passed through rather than restated here.
     const check = canGenerate(loaded.state)
-    if (!check.ok) return refusal(check)
+    if (!check.ok) return { ok: false, ...refusal(check) }
 
     return regenerateTurnInPlace(loaded, last)
   })

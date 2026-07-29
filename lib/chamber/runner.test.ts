@@ -69,6 +69,26 @@ describe('runRound', () => {
     expect(step).toHaveBeenCalledTimes(2)
   })
 
+  it('stops like a pause when a step was aborted mid-stream', async () => {
+    const step = scriptedStep([OK, { kind: 'aborted' }])
+
+    const result = await runRound({ step, shouldStop: never, maxSteps: 5 })
+
+    // The aborted step stored a failed turn, not a usable one, so it does not
+    // count — and the convener already knows why it stopped, so no message.
+    expect(result).toEqual({ steps: 1, stoppedBy: 'pause' })
+    expect(step).toHaveBeenCalledTimes(2)
+  })
+
+  it('never steps at all when the very first step is aborted', async () => {
+    const step = scriptedStep([{ kind: 'aborted' }])
+
+    expect(await runRound({ step, shouldStop: never, maxSteps: 5 })).toEqual({
+      steps: 0,
+      stoppedBy: 'pause',
+    })
+  })
+
   it('cannot run away: maxSteps bounds the loop', async () => {
     const step = scriptedStep([OK, OK, OK])
 

@@ -18,6 +18,27 @@ import 'server-only'
 const inFlight = new Set<string>()
 
 /**
+ * Takes the session's lock, or reports that it is already held.
+ *
+ * The primitive form, for the streaming turn generators (T-030): an async
+ * generator cannot be wrapped in a callback, because the lock has to stay held
+ * across every `yield` until the turn is persisted. Returns the release
+ * function, which is idempotent — calling it twice can never free a lock a
+ * later caller has since taken.
+ */
+export function acquireSessionLock(sessionId: string): (() => void) | null {
+  if (inFlight.has(sessionId)) return null
+
+  inFlight.add(sessionId)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    inFlight.delete(sessionId)
+  }
+}
+
+/**
  * Runs `run` while holding the session's lock.
  *
  * Returns `{ locked: true }` without calling `run` when a generation is already
@@ -29,12 +50,12 @@ export async function withSessionLock<T>(
   sessionId: string,
   run: () => Promise<T>,
 ): Promise<{ locked: true } | { locked: false; value: T }> {
-  if (inFlight.has(sessionId)) return { locked: true }
+  const release = acquireSessionLock(sessionId)
+  if (release === null) return { locked: true }
 
-  inFlight.add(sessionId)
   try {
     return { locked: false, value: await run() }
   } finally {
-    inFlight.delete(sessionId)
+    release()
   }
 }

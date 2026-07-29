@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { withSessionLock } from './lock'
+import { acquireSessionLock, withSessionLock } from './lock'
 
 /** A promise plus the handles to settle it, so a test can hold a lock open. */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (e: unknown) => void } {
@@ -12,6 +12,42 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   })
   return { promise, resolve, reject }
 }
+
+describe('acquireSessionLock', () => {
+  it('hands out a release the first time and null while it is held', () => {
+    const release = acquireSessionLock('acquire-held')
+    expect(release).not.toBeNull()
+    expect(acquireSessionLock('acquire-held')).toBeNull()
+
+    release?.()
+    const second = acquireSessionLock('acquire-held')
+    expect(second).not.toBeNull()
+    second?.()
+  })
+
+  it('is idempotent, so a double release cannot free a later caller’s lock', () => {
+    const release = acquireSessionLock('acquire-idempotent')
+    release?.()
+    // The stale handle must not evict the lock the next caller just took.
+    const next = acquireSessionLock('acquire-idempotent')
+    release?.()
+
+    expect(next).not.toBeNull()
+    expect(acquireSessionLock('acquire-idempotent')).toBeNull()
+    next?.()
+  })
+
+  it('locks each session independently', () => {
+    const a = acquireSessionLock('acquire-a')
+    const b = acquireSessionLock('acquire-b')
+
+    expect(a).not.toBeNull()
+    expect(b).not.toBeNull()
+
+    a?.()
+    b?.()
+  })
+})
 
 describe('withSessionLock', () => {
   it('runs the work and returns its value when the session is free', async () => {

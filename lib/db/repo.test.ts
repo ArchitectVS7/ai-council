@@ -97,9 +97,13 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
     // projection (T-022) — no database and no HTTP knowledge.
     // `@/lib/councils/members` is the pure speaking-order arithmetic behind the
     // builder (T-023) — likewise no database and no HTTP knowledge.
+    // `@/lib/api/turn-stream` is the SSE response glue (T-030): it maps the
+    // session service's event sequence onto a status code or an event stream,
+    // and like the rest of `@/lib/api/*` it knows nothing of the database.
     const allowed = new Set([
       '@/lib/api/http',
       '@/lib/api/schemas',
+      '@/lib/api/turn-stream',
       '@/lib/council/snapshot',
       '@/lib/councils/members',
       '@/lib/db/repo',

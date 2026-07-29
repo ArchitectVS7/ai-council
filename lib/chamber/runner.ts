@@ -19,6 +19,12 @@ export type StepOutcome =
   | { kind: 'turn'; failed: boolean; atRoundBoundary: boolean }
   /** The server refused (409/422/404); `message` is its text, verbatim. */
   | { kind: 'refused'; message: string }
+  /**
+   * The convener aborted the stream mid-turn (T-030). The server recorded a
+   * `failed` turn with the abort as its reason, so there is nothing to say — the
+   * run simply stops, exactly as a Pause between steps would.
+   */
+  | { kind: 'aborted' }
 
 /**
  * Why the run stopped. `step-limit` is the belt-and-braces case: `maxSteps` is
@@ -51,6 +57,9 @@ export async function runRound(deps: {
     if (outcome.kind === 'refused') {
       return { steps, stoppedBy: 'refused', message: outcome.message }
     }
+    // An aborted step stored a failed turn rather than a usable one, so it does
+    // not count toward the round — and it is a Pause by another name.
+    if (outcome.kind === 'aborted') return { steps, stoppedBy: 'pause' }
 
     steps += 1
     // Halt immediately on a failure: the convener retries that turn before the
