@@ -13,7 +13,13 @@ import {
 } from './llm'
 import { MAX_MODEL_LENGTH, type ProviderName } from './models'
 
-const ENV_KEYS = ['LLM_PROVIDER', 'LLM_MODEL', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const
+const ENV_KEYS = [
+  'LLM_PROVIDER',
+  'LLM_MODEL',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'LLM_BASE_URL',
+] as const
 
 const OPTIONS: GenerateOptions = {
   system: 'You are the Chair of a three-seat council.',
@@ -54,7 +60,7 @@ describe('getProviderName', () => {
   })
 
   it('returns each supported provider', () => {
-    const providers: ProviderName[] = ['anthropic', 'openai', 'mock']
+    const providers: ProviderName[] = ['anthropic', 'openai', 'local', 'mock']
     for (const provider of providers) {
       process.env.LLM_PROVIDER = provider
       expect(getProviderName()).toBe(provider)
@@ -64,7 +70,7 @@ describe('getProviderName', () => {
   it('throws loudly on an unsupported value — no fallback (R4)', () => {
     process.env.LLM_PROVIDER = 'gemini'
     expect(() => getProviderName()).toThrowError(/LLM_PROVIDER/)
-    expect(() => getProviderName()).toThrowError(/anthropic, openai, mock/)
+    expect(() => getProviderName()).toThrowError(/anthropic, openai, local, mock/)
   })
 })
 
@@ -73,6 +79,8 @@ describe('getModel', () => {
     expect(getModel()).toBe('claude-sonnet-5')
     process.env.LLM_PROVIDER = 'openai'
     expect(getModel()).toBe('gpt-4o-mini')
+    process.env.LLM_PROVIDER = 'local'
+    expect(getModel()).toBe('llama3.3')
     process.env.LLM_PROVIDER = 'mock'
     expect(getModel()).toBe('mock')
   })
@@ -504,5 +512,128 @@ describe('generateStream against OpenAI', () => {
     stub(frame(null, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } }) + frame(null, '[DONE]'))
 
     await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/no text/)
+  })
+})
+
+/**
+ * The local provider (PRD Amendment A2): the OpenAI-compatible wire shape
+ * pointed at the operator's own server, with no key at all.
+ *
+ * The endpoint is stubbed, so nothing here needs a running Ollama — the
+ * assertions are on the URL, the headers and the body that `fetch` was handed.
+ */
+describe('generateStream against a local OpenAI-compatible endpoint', () => {
+  const DEFAULT_URL = 'http://localhost:11434/v1/chat/completions'
+
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'local'
+    // Deliberately no key of any kind in the environment.
+  })
+
+  function stub(body: string, status = 200) {
+    const spy = vi.fn(async () => new Response(body, { status }))
+    vi.stubGlobal('fetch', spy)
+    return spy
+  }
+
+  /** The `[url, init]` pair the provider handed to `fetch`. */
+  function callOf(spy: ReturnType<typeof stub>): [string, RequestInit] {
+    return spy.mock.calls[0] as unknown as [string, RequestInit]
+  }
+
+  function headerNames(init: RequestInit): string[] {
+    return Object.keys(init.headers as Record<string, string>).map((name) => name.toLowerCase())
+  }
+
+  it('streams from the documented Ollama default when LLM_BASE_URL is unset', async () => {
+    const spy = stub(OPENAI_STREAM)
+
+    const { deltas, result } = await drain(generateStream(OPTIONS))
+
+    const [url, init] = callOf(spy)
+    expect(url).toBe(DEFAULT_URL)
+    const body = JSON.parse(String(init.body))
+    expect(body.stream).toBe(true)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    expect(body.model).toBe('llama3.3')
+    expect(deltas).toEqual(['A measured ', 'opening.'])
+    expect(result).toEqual({ text: 'A measured opening.', promptTokens: 10, completionTokens: 5 })
+  })
+
+  it('takes its base URL from LLM_BASE_URL, trailing slash and all', async () => {
+    process.env.LLM_BASE_URL = 'http://192.168.1.9:1234/v1/'
+    const spy = stub(OPENAI_STREAM)
+
+    await drain(generateStream(OPTIONS))
+
+    expect(callOf(spy)[0]).toBe('http://192.168.1.9:1234/v1/chat/completions')
+  })
+
+  it('sends no Authorization header — a local server issues no key', async () => {
+    const spy = stub(OPENAI_STREAM)
+
+    await drain(generateStream(OPTIONS))
+
+    const init = callOf(spy)[1]
+    expect(headerNames(init)).toEqual(['content-type'])
+    expect(JSON.stringify(init)).not.toMatch(/bearer/i)
+    expect(process.env.OPENAI_API_KEY).toBeUndefined()
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined()
+  })
+
+  it('feeds `generate` too, so stream and whole-text agree by construction', async () => {
+    stub(OPENAI_STREAM)
+
+    expect(await generate(OPTIONS)).toEqual({
+      text: 'A measured opening.',
+      promptTokens: 10,
+      completionTokens: 5,
+    })
+  })
+
+  it('sends a per-session model override, local ids and all (A1)', async () => {
+    const spy = stub(OPENAI_STREAM)
+
+    await generate(OPTIONS, 'qwen2.5')
+
+    expect(JSON.parse(String(callOf(spy)[1].body)).model).toBe('qwen2.5')
+  })
+
+  it('throws loudly when nothing is listening, naming the endpoint (R4)', async () => {
+    const spy = vi.fn(async () => {
+      throw new TypeError('fetch failed')
+    })
+    vi.stubGlobal('fetch', spy)
+
+    const failure = drain(generateStream(OPTIONS))
+    await expect(failure).rejects.toThrowError(/unreachable/i)
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(DEFAULT_URL)
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/LLM_BASE_URL/)
+    // The underlying message is kept, not swallowed.
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/fetch failed/)
+  })
+
+  it('throws on a non-2xx with the status and the body, in the stored wording', async () => {
+    stub('model not found', 404)
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(
+      'Local provider request failed (404): model not found',
+    )
+  })
+
+  it('refuses a malformed LLM_BASE_URL instead of using the default (R4)', async () => {
+    process.env.LLM_BASE_URL = 'not a url'
+    const spy = stub(OPENAI_STREAM)
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/LLM_BASE_URL/)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a non-http scheme rather than handing it to fetch', async () => {
+    process.env.LLM_BASE_URL = 'file:///models/v1'
+    const spy = stub(OPENAI_STREAM)
+
+    await expect(drain(generateStream(OPTIONS))).rejects.toThrowError(/http/)
+    expect(spy).not.toHaveBeenCalled()
   })
 })

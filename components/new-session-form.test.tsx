@@ -78,6 +78,11 @@ function optionValues(select: HTMLSelectElement): string[] {
   return [...select.options].map((option) => option.value)
 }
 
+/** The free-text model control the `local` provider renders instead (A2). */
+function modelInput(): HTMLInputElement {
+  return screen.getByLabelText('Model') as HTMLInputElement
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -182,6 +187,61 @@ describe('model picker (PRD Amendment A1)', () => {
 
     await waitFor(() => expect(push).toHaveBeenCalled())
     expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body)).model).toBe('gpt-4o')
+  })
+})
+
+describe('model picker under the local provider (PRD Amendment A2)', () => {
+  it('is free text, not a closed list — installed models vary by machine', async () => {
+    stubHappyCouncils(() => json({}, 500))
+    const { container } = renderForm('local')
+    await screen.findByLabelText('Council')
+
+    const field = modelInput()
+    expect(field.tagName).toBe('INPUT')
+    expect(field.value).toBe('')
+    // No curated select survives alongside it.
+    expect(container.querySelector('select#model')).toBeNull()
+  })
+
+  it('suggests the common local models through a linked datalist', async () => {
+    stubHappyCouncils(() => json({}, 500))
+    const { container } = renderForm('local')
+    await screen.findByLabelText('Council')
+
+    const listId = modelInput().getAttribute('list')
+    expect(listId).toBe('model-suggestions')
+    const datalist = container.querySelector(`datalist#${listId}`)
+    expect(datalist).not.toBeNull()
+    expect([...datalist!.querySelectorAll('option')].map((option) => option.value)).toEqual([
+      'llama3.3',
+      'qwen2.5',
+      'mistral',
+    ])
+  })
+
+  it('sends whatever model was typed, including ids no list knows', async () => {
+    const fetchSpy = stubHappyCouncils(() => json({ session: { id: SESSION_ID } }, 201))
+    await renderLoaded('local')
+
+    fireEvent.change(topicField(), { target: { value: 'Should we ship on Friday?' } })
+    fireEvent.change(modelInput(), { target: { value: 'phi4' } })
+    fireEvent.click(submitButton())
+
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body)).model).toBe('phi4')
+  })
+
+  it('sends no model key when the field is blank or whitespace', async () => {
+    const fetchSpy = stubHappyCouncils(() => json({ session: { id: SESSION_ID } }, 201))
+    await renderLoaded('local')
+
+    fireEvent.change(topicField(), { target: { value: 'Should we ship on Friday?' } })
+    fireEvent.change(modelInput(), { target: { value: '   ' } })
+    fireEvent.click(submitButton())
+
+    await waitFor(() => expect(push).toHaveBeenCalled())
+    const body = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body)) as Record<string, unknown>
+    expect('model' in body).toBe(false)
   })
 })
 

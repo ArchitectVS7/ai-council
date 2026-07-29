@@ -25,13 +25,21 @@ export type SessionView = {
   /** True only under `LLM_PROVIDER=mock` — the one place mock output is allowed (R4). */
   mockMode: boolean
   /**
+   * True only under `LLM_PROVIDER=local`: the turns were generated on the
+   * operator's own machine (PRD Amendment A2), which the chamber marks with a
+   * neutral LOCAL indicator beside the model. Unrelated to `mockMode` — local
+   * output is real model output, so it carries no warning badge.
+   */
+  localMode: boolean
+  /**
    * The app default model, so the chamber can show the *effective* model of a
    * session that set no override of its own (PRD Amendment A1). A resolved
    * public model id and nothing else — no key material leaves the server.
    *
    * The provider *name* is deliberately not added here: the chamber's only
-   * provider-dependent behaviour is the mock badge, which `mockMode` already
-   * carries, and a field with no consumer is code without a caller (R2).
+   * provider-dependent behaviours are the mock badge and the local indicator,
+   * which the two booleans above already carry, and a field with no consumer is
+   * code without a caller (R2).
    * The `/` form, which does need the name, reads it in its own server
    * component by the same mechanism.
    */
@@ -48,5 +56,11 @@ export async function loadSessionView(sessionId: string): Promise<SessionView | 
   // un-badged page (R4), so it is deliberately not caught here. `getModel()` is
   // called with no argument on purpose — this is the app default, not the
   // session's override, which the chamber reads off the session row itself.
-  return { ...found, mockMode: getProviderName() === 'mock', defaultModel: getModel() }
+  const provider = getProviderName()
+  return {
+    ...found,
+    mockMode: provider === 'mock',
+    localMode: provider === 'local',
+    defaultModel: getModel(),
+  }
 }

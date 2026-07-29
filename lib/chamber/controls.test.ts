@@ -44,6 +44,7 @@ function view(overrides: { status?: ChamberView['session']['status']; turnCursor
     },
     turns: overrides.turns ?? [turn({ seq: 0 })],
     mockMode: true,
+    localMode: false,
     defaultModel: 'mock',
   }
 }

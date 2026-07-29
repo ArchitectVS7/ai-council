@@ -92,12 +92,15 @@ npm run check     # typecheck && lint && test && knip  <- the gate
 
 ## Environment
 
-`.env.example` lists the only five variables the app reads:
+`.env.example` lists the only six variables the app reads:
 
-`DATABASE_URL`, `LLM_PROVIDER` (`anthropic` | `openai` | `mock`), `LLM_MODEL`
-(default `claude-sonnet-5`), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
+`DATABASE_URL`, `LLM_PROVIDER` (`anthropic` | `openai` | `local` | `mock`), `LLM_MODEL`
+(default `claude-sonnet-5`), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `LLM_BASE_URL`
+(read only when `LLM_PROVIDER=local`; default `http://localhost:11434/v1`, and that
+provider sends no key at all).
 
-Copy it to `.env.local` for local runs. Do not add a sixth variable without a PRD amendment.
+Copy it to `.env.local` for local runs. Do not add a seventh variable without a PRD
+amendment — A2 added the sixth.
 
 ## Structure
 

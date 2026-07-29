@@ -3,7 +3,9 @@
 /**
  * "New session" on `/` (PRD §6 screen 1): topic textarea, council picker, a
  * rounds override that defaults to the chosen council's `default_rounds`, and a
- * model picker (PRD Amendment A1).
+ * model picker (PRD Amendment A1) — a curated list for the cloud providers, a
+ * free-text field for `local`, whose model ids are installation-specific
+ * (PRD Amendment A2).
  *
  * Server-authoritative (PRD §5.1): this form posts `{topic, councilId, rounds}`
  * plus an optional `model` to `POST /api/sessions` (PRD §8) and then navigates
@@ -22,7 +24,7 @@ import { useRouter } from 'next/navigation'
 import { describeFailure, messageOf, readErrorBody } from '@/lib/api/failure'
 import { MAX_ROUNDS, MIN_ROUNDS } from '@/lib/council/snapshot'
 import type { CouncilOption } from '@/lib/home/types'
-import { MODEL_CHOICES } from '@/lib/models'
+import { MAX_MODEL_LENGTH, MODEL_CHOICES } from '@/lib/models'
 import type { ProviderName } from '@/lib/models'
 
 export default function NewSessionForm({ provider }: { provider: ProviderName }) {
@@ -71,6 +73,10 @@ export default function NewSessionForm({ provider }: { provider: ProviderName })
   // Empty under `mock`: there is nothing to choose between, so the control is
   // absent rather than shown and ignored.
   const modelChoices = MODEL_CHOICES[provider]
+  // Under `local` the list is a suggestion, not a closed set: which models an
+  // installation has pulled is its own business (PRD Amendment A2), so the
+  // control is free text with a datalist rather than a select.
+  const freeTextModel = provider === 'local'
 
   function onCouncilChange(nextId: string) {
     setCouncilId(nextId)
@@ -99,6 +105,11 @@ export default function NewSessionForm({ provider }: { provider: ProviderName })
       return
     }
 
+    // Trimmed so a free-text model behaves exactly like the select's "Provider
+    // default" when it is blank: the key is omitted, never sent as whitespace,
+    // which the strict server schema would reject with a 400.
+    const trimmedModel = model.trim()
+
     setSubmitting(true)
     try {
       const response = await fetch('/api/sessions', {
@@ -111,7 +122,7 @@ export default function NewSessionForm({ provider }: { provider: ProviderName })
           topic: trimmedTopic,
           councilId,
           rounds: parsedRounds,
-          ...(model === '' ? {} : { model }),
+          ...(trimmedModel === '' ? {} : { model: trimmedModel }),
         }),
       })
 
@@ -197,19 +208,41 @@ export default function NewSessionForm({ provider }: { provider: ProviderName })
             <label htmlFor="model" className="text-sm font-medium text-slate-900">
               Model
             </label>
-            <select
-              id="model"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              className="rounded border border-slate-300 p-2 text-sm"
-            >
-              <option value="">Provider default</option>
-              {modelChoices.map((choice) => (
-                <option key={choice} value={choice}>
-                  {choice}
-                </option>
-              ))}
-            </select>
+            {freeTextModel ? (
+              <>
+                <input
+                  id="model"
+                  list="model-suggestions"
+                  maxLength={MAX_MODEL_LENGTH}
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  className="rounded border border-slate-300 p-2 text-sm"
+                  placeholder="llama3.3"
+                />
+                <datalist id="model-suggestions">
+                  {modelChoices.map((choice) => (
+                    <option key={choice} value={choice} />
+                  ))}
+                </datalist>
+                <span className="text-xs text-slate-600">
+                  Any model your server has pulled. Leave blank for the default.
+                </span>
+              </>
+            ) : (
+              <select
+                id="model"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                className="rounded border border-slate-300 p-2 text-sm"
+              >
+                <option value="">Provider default</option>
+                {modelChoices.map((choice) => (
+                  <option key={choice} value={choice}>
+                    {choice}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         )}
       </div>

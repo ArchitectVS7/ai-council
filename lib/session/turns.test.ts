@@ -597,6 +597,23 @@ describe('a provider failure (PRD §5.4, R4)', () => {
     expect(expectOk(await advanceSession(session.id)).turn.speakerName).toBe('The Skeptic')
   })
 
+  it('stores an unreachable local endpoint on a failed turn like any other outage (A2)', async () => {
+    const unreachable =
+      'Local provider at http://localhost:11434/v1/chat/completions is unreachable: fetch failed. ' +
+      'Start an OpenAI-compatible server (Ollama, LM Studio, vLLM) and check LLM_BASE_URL.'
+    const session = createSession()
+    provider.nextError = new Error(unreachable)
+
+    const result = expectOk(await advanceSession(session.id))
+
+    expect(result.turn.status).toBe('failed')
+    expect(result.turn.error).toBe(unreachable)
+    expect(storedSession(session.id).status).toBe('active')
+    // Nothing else may proceed until the operator starts the server and retries.
+    expect(expectRefused(await advanceSession(session.id)).reason).toBe('awaiting-retry')
+    expect(expectOk(await retryLastTurn(session.id)).turn.status).toBe('complete')
+  })
+
   it('records a second failure rather than masking it', async () => {
     const session = createSession()
     provider.nextError = new Error(OUTAGE)

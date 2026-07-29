@@ -20,10 +20,11 @@ npm run dev
 | Variable | Notes |
 |---|---|
 | `DATABASE_URL` | Neon Postgres connection string |
-| `LLM_PROVIDER` | `anthropic` \| `openai` \| `mock` |
+| `LLM_PROVIDER` | `anthropic` \| `openai` \| `local` \| `mock` |
 | `LLM_MODEL` | default `claude-sonnet-5` |
 | `ANTHROPIC_API_KEY` | required when `LLM_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | required when `LLM_PROVIDER=openai` |
+| `LLM_BASE_URL` | used only when `LLM_PROVIDER=local`; default `http://localhost:11434/v1`, no key sent |
 
 ## Scripts
 

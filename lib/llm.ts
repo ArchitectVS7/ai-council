@@ -24,9 +24,16 @@ import { readServerEvents } from '@/lib/sse'
  * client-safe, so the picker on `/` and this module cannot disagree about what
  * a provider is called or what its default model is.
  *
+ * Four providers: `anthropic`, `openai`, `local` and `mock`. `local` is the
+ * same OpenAI-compatible wire shape as `openai` pointed at `LLM_BASE_URL` — an
+ * Ollama, LM Studio or vLLM server on the operator's own machine (PRD Amendment
+ * A2) — and it sends *no* key by design: such a server has none, so an
+ * `Authorization` header would be a fabricated credential.
+ *
  * There are no silent fallbacks (PRD R4): a missing key throws, a bad provider
- * name throws, a malformed provider payload throws. The `mock` provider runs
- * only when `LLM_PROVIDER=mock` is set explicitly — never as a rescue path.
+ * name throws, an unreachable local endpoint throws, a malformed provider
+ * payload throws. The `mock` provider runs only when `LLM_PROVIDER=mock` is set
+ * explicitly — never as a rescue path.
  *
  * Providers are called with plain `fetch`; no vendor SDKs are used, keeping the
  * production dependency budget small (PRD §9: "~50 lines, not a framework").
@@ -62,6 +69,18 @@ const API_KEY_VARS: Record<'anthropic' | 'openai', string> = {
 }
 
 const REQUEST_TIMEOUT_MS = 120_000
+
+/**
+ * Where `LLM_PROVIDER=local` looks when `LLM_BASE_URL` is unset: the address
+ * Ollama serves its OpenAI-compatible API on out of the box.
+ *
+ * A documented default, not a silent fallback (R4) — it is stated in
+ * `.env.example` and in CLAUDE.md, and every *unreadable* value throws instead.
+ */
+const DEFAULT_LOCAL_BASE_URL = 'http://localhost:11434/v1'
+
+/** Names the local provider in errors and in the wording a failed turn stores. */
+const LOCAL_LABEL = 'Local provider'
 
 /**
  * Upper bounds are generous on purpose: a persona prompt carries the council
@@ -292,6 +311,18 @@ export async function* generateStream(
     return
   }
 
+  if (provider === 'local') {
+    // Before `requireApiKey`, because a local server has no key to require
+    // (PRD Amendment A2): the OpenAI wire shape, the operator's own endpoint.
+    yield* streamOpenAICompatible(
+      options,
+      getModel(modelOverride),
+      { url: localChatCompletionsUrl(), key: null, label: LOCAL_LABEL },
+      signal,
+    )
+    return
+  }
+
   const key = requireApiKey(provider)
   const model = getModel(modelOverride)
 
@@ -299,7 +330,46 @@ export async function* generateStream(
     yield* streamAnthropic(options, model, key, signal)
     return
   }
-  yield* streamOpenAI(options, model, key, signal)
+  yield* streamOpenAICompatible(
+    options,
+    model,
+    { url: 'https://api.openai.com/v1/chat/completions', key, label: 'OpenAI' },
+    signal,
+  )
+}
+
+/**
+ * The chat-completions URL for `LLM_PROVIDER=local`.
+ *
+ * `LLM_BASE_URL` names the OpenAI-compatible *base* (the part ending in `/v1`),
+ * matching how Ollama, LM Studio and vLLM document themselves, so the path is
+ * appended here rather than asked of the operator. Unset means the documented
+ * Ollama default; unreadable throws (R4) rather than quietly falling back to it,
+ * because a typo'd host must not send the council's prompts somewhere else.
+ *
+ * Module-local: the tests read the URL off the stubbed `fetch`, so there is no
+ * export without a caller (R2 / knip).
+ */
+function localChatCompletionsUrl(): string {
+  const configured = process.env.LLM_BASE_URL?.trim()
+  const raw = configured && configured.length > 0 ? configured : DEFAULT_LOCAL_BASE_URL
+
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error(
+      `LLM_BASE_URL is not a valid URL: ${JSON.stringify(raw)}. ` +
+        `Give the OpenAI-compatible base, for example ${DEFAULT_LOCAL_BASE_URL}.`,
+    )
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `LLM_BASE_URL must be an http or https URL; got ${JSON.stringify(raw)}. ` +
+        `For example ${DEFAULT_LOCAL_BASE_URL}.`,
+    )
+  }
+  return `${raw.replace(/\/+$/, '')}/chat/completions`
 }
 
 /**
@@ -362,15 +432,36 @@ async function* streamAnthropic(
   yield { type: 'done', result: finish(text, promptTokens, completionTokens, 'Anthropic') }
 }
 
-async function* streamOpenAI(
+/**
+ * One endpoint speaking the OpenAI chat-completions protocol.
+ *
+ * `key` is `null` for a local server, which has none: the header is then not
+ * sent at all rather than sent empty (PRD Amendment A2).
+ */
+type OpenAICompatibleEndpoint = { url: string; key: string | null; label: string }
+
+/**
+ * The single OpenAI-compatible code path, shared by `openai` and `local`.
+ *
+ * One implementation rather than two so the hosted and the local provider
+ * cannot drift apart in request shape, stream parsing, or error wording — the
+ * only differences are the URL, the presence of a key, and the label the
+ * transcript stores.
+ */
+async function* streamOpenAICompatible(
   options: GenerateOptions,
   model: string,
-  key: string,
+  endpoint: OpenAICompatibleEndpoint,
   signal: AbortSignal | undefined,
 ): AsyncGenerator<StreamChunk> {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  // No key, no header: a bearer token a local server never issued would be a
+  // fabricated credential, and some servers reject an empty one outright.
+  if (endpoint.key !== null) headers.authorization = `Bearer ${endpoint.key}`
+
+  const response = await requestOpenAICompatible(endpoint, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    headers,
     body: JSON.stringify({
       ...buildOpenAIRequest(options, model),
       stream: true,
@@ -380,7 +471,7 @@ async function* streamOpenAI(
     }),
     signal: requestSignal(signal),
   })
-  const body = await requireStreamBody(response, 'OpenAI')
+  const body = await requireStreamBody(response, endpoint.label)
 
   let text = ''
   let promptTokens: number | null = null
@@ -390,7 +481,7 @@ async function* streamOpenAI(
     signal?.throwIfAborted()
     if (frame.data === '[DONE]') break
 
-    const chunk = parseStreamPayload(openAIStreamChunkSchema, frame.data, 'OpenAI')
+    const chunk = parseStreamPayload(openAIStreamChunkSchema, frame.data, endpoint.label)
     const piece = chunk.choices[0]?.delta?.content
     if (typeof piece === 'string' && piece.length > 0) {
       text += piece
@@ -403,7 +494,35 @@ async function* streamOpenAI(
     }
   }
 
-  yield { type: 'done', result: finish(text, promptTokens, completionTokens, 'OpenAI') }
+  yield { type: 'done', result: finish(text, promptTokens, completionTokens, endpoint.label) }
+}
+
+/**
+ * Issues the request, turning "never reached a server" into an actionable error.
+ *
+ * `fetch` rejects with a bare `TypeError: fetch failed` when nothing is
+ * listening, which for the local provider is the single most likely failure and
+ * says nothing an operator can act on. The rewrite names the endpoint and what
+ * to check; the underlying message is kept verbatim inside it (R4). An abort —
+ * the convener pausing, or the request timeout — is rethrown untouched, because
+ * that is not an unreachable endpoint and the caller records it as its own kind
+ * of failed turn.
+ */
+async function requestOpenAICompatible(
+  endpoint: OpenAICompatibleEndpoint,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(endpoint.url, init)
+  } catch (error) {
+    if (init.signal?.aborted === true) throw error
+    const detail = error instanceof Error ? error.message : String(error)
+    const advice =
+      endpoint.key === null
+        ? ' Start an OpenAI-compatible server (Ollama, LM Studio, vLLM) and check LLM_BASE_URL.'
+        : ''
+    throw new Error(`${endpoint.label} at ${endpoint.url} is unreachable: ${detail}.${advice}`)
+  }
 }
 
 /**
@@ -453,7 +572,12 @@ function finish(
     throw new Error(`${label} stream contained no text.`)
   }
   if (promptTokens === null || completionTokens === null) {
-    throw new Error(`${label} stream ended without usage totals; the turn's token counts are unknown.`)
+    // Never estimated: a made-up token count is invented data (R4).
+    const hint =
+      label === LOCAL_LABEL ? ' The server may not honour stream_options.include_usage.' : ''
+    throw new Error(
+      `${label} stream ended without usage totals; the turn's token counts are unknown.${hint}`,
+    )
   }
   return { text, promptTokens, completionTokens }
 }

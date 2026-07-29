@@ -55,6 +55,8 @@ export type ChamberView = {
   session: ChamberSession
   turns: ChamberTurn[]
   mockMode: boolean
+  /** True under `LLM_PROVIDER=local` — the neutral LOCAL indicator, not a warning. */
+  localMode: boolean
   /** The app default, used when the session set no model of its own. */
   defaultModel: string
 }

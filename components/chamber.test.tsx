@@ -72,6 +72,7 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
       },
     ],
     mockMode: true,
+    localMode: false,
     defaultModel: 'claude-sonnet-5',
     ...overrides,
   }
@@ -279,6 +280,22 @@ describe('chamber header', () => {
     render(<Chamber initialView={fixture({ mockMode: false })} />)
 
     expect(screen.queryByText(/mock mode/i)).toBeNull()
+  })
+
+  it('marks LOCAL beside the model when the server runs the local provider (A2)', () => {
+    render(<Chamber initialView={fixture({ mockMode: false, localMode: true })} />)
+
+    const indicator = screen.getByTestId('local-indicator')
+    expect(indicator.textContent).toBe('Local')
+    // Beside the effective model, and no mock warning: local output is real.
+    expect(indicator.parentElement?.contains(screen.getByTestId('session-model'))).toBe(true)
+    expect(screen.queryByText(/mock mode/i)).toBeNull()
+  })
+
+  it('shows no LOCAL indicator under a hosted provider', () => {
+    render(<Chamber initialView={fixture({ mockMode: false, localMode: false })} />)
+
+    expect(screen.queryByTestId('local-indicator')).toBeNull()
   })
 
   it("shows the session's own model when it set one (PRD Amendment A1)", () => {

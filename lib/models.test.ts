@@ -15,7 +15,7 @@ describe('model vocabulary', () => {
     expect(Object.keys(DEFAULT_MODELS).sort()).toEqual([...PROVIDER_NAMES].sort())
   })
 
-  it.each(['anthropic', 'openai'] as const)(
+  it.each(['anthropic', 'openai', 'local'] as const)(
     'offers %s a list that contains its own default model',
     (provider) => {
       expect(MODEL_CHOICES[provider].length).toBeGreaterThan(0)
@@ -25,6 +25,10 @@ describe('model vocabulary', () => {
 
   it('offers nothing for mock, so the picker is hidden rather than inert', () => {
     expect(MODEL_CHOICES.mock).toEqual([])
+  })
+
+  it('offers local a suggestion list, since installed models vary by machine (A2)', () => {
+    expect(MODEL_CHOICES.local).toEqual(['llama3.3', 'qwen2.5', 'mistral'])
   })
 
   it('lists only ids the session schema and the column will accept', () => {

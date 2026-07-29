@@ -41,6 +41,20 @@ describe('loadSessionView', () => {
 
     providerName.mockReturnValue('openai')
     expect((await loadSessionView(SESSION_ID))?.mockMode).toBe(false)
+
+    // Local output is real model output: it is marked, never badged as mock.
+    providerName.mockReturnValue('local')
+    expect((await loadSessionView(SESSION_ID))?.mockMode).toBe(false)
+  })
+
+  it('reports local mode only under the local provider (A2)', async () => {
+    providerName.mockReturnValue('local')
+    expect((await loadSessionView(SESSION_ID))?.localMode).toBe(true)
+
+    for (const provider of ['anthropic', 'openai', 'mock']) {
+      providerName.mockReturnValue(provider)
+      expect((await loadSessionView(SESSION_ID))?.localMode).toBe(false)
+    }
   })
 
   it('passes the session and its transcript through unchanged', async () => {

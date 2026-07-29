@@ -347,12 +347,21 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
             <dd className="font-medium text-slate-900">{snapshot.name}</dd>
           </div>
           {/* The effective model (PRD Amendment A1): the session's own choice,
-              or the app default when it made none. */}
-          <div className="flex gap-1">
+              or the app default when it made none. Under `local` (Amendment A2)
+              it carries a neutral marker — where the model ran, not a warning. */}
+          <div className="flex items-center gap-1">
             <dt>Model:</dt>
             <dd className="font-medium text-slate-900" data-testid="session-model">
               {view.session.model ?? view.defaultModel}
             </dd>
+            {view.localMode ? (
+              <span
+                data-testid="local-indicator"
+                className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700"
+              >
+                Local
+              </span>
+            ) : null}
           </div>
           <div className="flex gap-1">
             <dt>Status:</dt>
