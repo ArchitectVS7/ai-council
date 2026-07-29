@@ -178,11 +178,15 @@ Per PRD Amendment A2 (privacy/local-first anchor use case): add a `local` provid
 Versioned JSON schema (zod) covering session config (topic, snapshot, status) + full transcript. Export button in the chamber; import on `/` creating a new session with imported turns (status preserved). Round-trip must be lossless.
 **Accept:** property-style unit test: export→parse→import→export yields deeply-equal JSON for fixtures including interjections, failed turns, and multiple syntheses; malformed import rejected with zod issues surfaced in UI; gate green.
 
+### T-031b · Council directive field — `status: TODO` · `coder: opus` · `after: T-023`
+Per PRD Amendment A3 (convener directive at the T-024 gate): councils gain an optional **directive** — a council-level instruction fed to every member (the Chair included) on every turn; unlike `description`, which stays display-only. Add nullable `directive text` to `councils` (new migration via `npm run db:generate`; a column, not a table). Zod: trimmed, max 2,000 chars, nullable. The snapshot shape gains `directive` (`{name, rounds, directive?, members:[...]}`), copied at session creation per the snapshot rule; existing snapshots without the key behave as null. The prompt builder appends a `COUNCIL DIRECTIVE:` block between the charter and COUNCIL RULES whenever the session's snapshot carries one — for persona turns and synthesis alike. Council builder UI: a "Directive" textarea under Description with helper text: "Fed to every member on every turn — use it to set the mode (adversarial, cooperative, hybrid-seeking). Description is display-only."
+**Accept:** migration SQL adds nullable `directive` to `councils` only; unit tests: snapshot builder copies the directive and old-shape snapshots without the key prompt without error; system prompt contains the `COUNCIL DIRECTIVE:` block for both persona and synthesis turns when set and omits it entirely when null; zod rejects >2,000 chars; builder textarea present with helper text and round-trips a directive (component test, mocked fetch); gate green.
+
 ### T-032 · Polish: loading states + keyboard — `status: TODO` · `coder: sonnet` · `after: T-030`
 Skeleton/loading states for sessions list and chamber; **Space = Step** keyboard shortcut in the chamber (only when no generation is in flight and focus is not in a text input).
 **Accept:** component tests: Space triggers step when idle, is ignored while generating and while an input/textarea has focus; skeletons render during the loading state of both pages; gate green.
 
-### T-033 · README + CLAUDE.md regeneration — `status: TODO` · `coder: sonnet` · `after: T-030b, T-031, T-032`
+### T-033 · README + CLAUDE.md regeneration — `status: TODO` · `coder: sonnet` · `after: T-030b, T-031, T-031b, T-032`
 Rewrite `README.md` from the shipped app (PRD R7): actual routes, actual env vars, actual npm scripts, glossary summary, screenshots optional. Update `CLAUDE.md` to match. Delete any remaining v1 references (pnpm claims, `/workflow-templates`, `db/schema.ts` paths, vercel/examples repository field if still present).
 **Accept:** every command in README exists in `package.json`; every route listed exists under `app/`; grep of README/CLAUDE.md finds none of the banned glossary words or v1 paths; gate green.
 

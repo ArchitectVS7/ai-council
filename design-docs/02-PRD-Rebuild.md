@@ -5,6 +5,7 @@
 **Date:** 2026-07-27
 **Amendments:** A1 (2026-07-28, convener directive at the T-016 gate) — per-session model selection: `sessions` gains a nullable `model` column, the new-session form gains a model picker (curated per-provider list, default = env `LLM_MODEL`), and the Chamber shows the effective model. Per-persona overrides remain deferred (§13).
 A2 (2026-07-28, convener decision after the M1 gate) — **privacy/local-first positioning**: a `local` LLM provider (OpenAI-compatible base URL — Ollama/LM Studio/vLLM; no API key) joins the provider set, `LLM_BASE_URL` joins the env-var set (now six), §4.1 states the product's reason to exist, §11 gains the sufficiency kill-test, and the fully-private deployment path (local model + local Postgres) is documented. Implemented by task T-030b.
+A3 (2026-07-28, convener directive at the T-024 gate) — **council directive**: councils gain an optional `directive` text field fed to every member (the Chair included) on every turn, entering the session snapshot at creation. Unlike `description`, which remains display-only. Closes the UX trap where the description box looks like it should influence behavior but doesn't. Implemented by task T-031b.
 
 ---
 
@@ -44,6 +45,7 @@ v1 died of scope, not of difficulty. The core engine (~200 lines of state machin
 | **Interjection** | A user-authored turn that steers the debate. |
 | **Synthesis** | The closing turn: agreements, open disagreements, recommendation. Produced by the Chair. |
 | **The Chair** | A built-in synthesizer persona present in every session (not part of the speaking order). |
+| **Directive** | Optional council-level instruction fed to every member (Chair included) on every turn — e.g. adversarial, cooperative, hybrid-seeking. Display-only `description` never reaches the AI; the directive always does. (A3) |
 
 Banned words in code/UI: *flow, workflow, template, debate (as a noun for the entity), discussion, agent*. If a concept needs a new word, amend this table first.
 
@@ -93,7 +95,7 @@ create(topic, council) → snapshot council into session
 
 Each generated turn is one LLM call:
 
-- **System prompt:** persona charter + fixed debate rules:
+- **System prompt:** persona charter + the council directive when one is set (A3) + fixed debate rules:
   - Stay in persona; never break character or mention being an AI panelist mechanic.
   - Engage at least one prior argument *by persona name* (rounds ≥ 2).
   - Address the most recent interjection if one exists since your last turn.
@@ -123,7 +125,7 @@ There is no marketing landing page, no dashboard, no settings screen in v2.
 
 1. **`/` — Sessions.** List (topic, council name, status, last activity) + "New session" (topic textarea + council picker + rounds override + model picker per Amendment A1). This is the home page.
 2. **`/sessions/[id]` — Chamber.** The product. Transcript as a threaded feed (persona-colored turns, interjections visually distinct, syntheses highlighted); controls: Step / Run round / Pause / Interject / Regenerate last / Synthesize / Reopen; Export Markdown (copy + download); turn counter; MOCK MODE badge when applicable.
-3. **`/councils` — Councils.** List + form-based editor: name, description, ordered member list (add/remove/reorder from persona library — plain buttons, **no drag-and-drop library**), default rounds. Editing a council never mutates past sessions (snapshot rule).
+3. **`/councils` — Councils.** List + form-based editor: name, description, directive (A3 — with helper text distinguishing it from the display-only description), ordered member list (add/remove/reorder from persona library — plain buttons, **no drag-and-drop library**), default rounds. Editing a council never mutates past sessions (snapshot rule).
 4. **`/personas` — Personas.** Library grid + editor: name, role (one line), charter (multiline), color. Archive instead of delete when referenced by any council or session.
 
 ---
@@ -132,11 +134,11 @@ There is no marketing landing page, no dashboard, no settings screen in v2.
 
 ```
 personas          id, name, role, charter, color, archived bool, created_at, updated_at
-councils          id, name, description, default_rounds int, archived bool, created_at, updated_at
+councils          id, name, description, directive text nullable (A3), default_rounds int, archived bool, created_at, updated_at
 council_members   council_id FK, persona_id FK, position int   (PK: council_id, position)
 sessions          id, topic text, council_id FK nullable,
                   model text nullable,                          -- per-session override; null = env default (A1)
-                  council_snapshot jsonb NOT NULL,   -- {name, rounds, members:[{name, role, charter, color}]}
+                  council_snapshot jsonb NOT NULL,   -- {name, rounds, directive?, members:[{name, role, charter, color}]} (directive per A3)
                   status enum(active|completed|abandoned),
                   turn_cursor int NOT NULL default 0,           -- server-authoritative position
                   created_at, updated_at, completed_at
