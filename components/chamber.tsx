@@ -19,7 +19,7 @@
  * Snapshot rule (PRD §7): the roster, the colours, and the council name all come
  * from `session.councilSnapshot`. Nothing here resolves a council id.
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { controlState, resultSeq } from '@/lib/chamber/controls'
 import { atRoundBoundary, runRound } from '@/lib/chamber/runner'
@@ -56,6 +56,29 @@ function describeStop(result: RunRoundResult): string | null {
     default:
       return null
   }
+}
+
+/**
+ * True when a bare Space press should mean Step rather than what it normally
+ * means (T-032).
+ *
+ * Holding the key must not queue a burst of turns, and any modifier belongs to
+ * the browser. The focus check is what keeps the shortcut out of the way of
+ * typing: an interjection is written in a textarea, and Space there is a space.
+ *
+ * Buttons and links are excluded for a different reason — the browser already
+ * fires a click on Space for a focused button, so without this guard pressing
+ * Space right after clicking Step would advance the session twice.
+ */
+function isStepShortcut(event: KeyboardEvent): boolean {
+  if (event.key !== ' ' && event.code !== 'Space') return false
+  if (event.repeat) return false
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
+
+  const focused = document.activeElement
+  if (focused === null) return true
+  if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(focused.tagName)) return false
+  return !(focused as HTMLElement).isContentEditable
 }
 
 export default function Chamber({ initialView }: { initialView: ChamberView }) {
@@ -347,6 +370,27 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
   // would refuse — no control here promises something the server will deny.
   const controls = controlState(view, busy)
 
+  /**
+   * Space = Step (T-032). The listener is only subscribed while `canGenerate`
+   * holds — which is `!busy && active && !atCap`, and `busy` covers the whole
+   * life of a request including the SSE stream. So "only when no generation is
+   * in flight" needs no second predicate to keep in sync with the server's
+   * refusal rules; it is the same one the Step button is disabled by.
+   */
+  useEffect(() => {
+    if (!controls.canGenerate) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isStepShortcut(event)) return
+      // Otherwise Space also scrolls the transcript out from under the reader.
+      event.preventDefault()
+      void runOnce('advance')
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [controls.canGenerate, runOnce])
+
   const colorOf = (speakerName: string | null): string | undefined =>
     snapshot.members.find((member) => member.name === speakerName)?.color
 
@@ -405,6 +449,7 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
           type="button"
           className="rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
           disabled={!controls.canGenerate}
+          title="Step (Space)"
           onClick={() => void runOnce('advance')}
         >
           Step
@@ -455,6 +500,8 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
             Reopen
           </button>
         ) : null}
+        {/* The one shortcut this screen has, said once. */}
+        <span className="self-center text-xs text-slate-500">Space = Step</span>
       </section>
 
       {/* Export never generates, so it is live even when the session is

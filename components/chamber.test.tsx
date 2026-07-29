@@ -721,6 +721,77 @@ describe('chamber reopen', () => {
   })
 })
 
+describe('chamber keyboard shortcut (T-032)', () => {
+  /** Every advance-shaped exchange: the stream, then the authoritative refetch. */
+  function stubAdvance() {
+    return stubFetch(async (url) => (url.endsWith('/advance') ? streamOf() : json(fixture())))
+  }
+
+  it('steps on Space when the session is idle', async () => {
+    const fetchSpy = stubAdvance()
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    expect(fetchSpy.mock.calls[0][0]).toBe(`/api/sessions/${SESSION_ID}/advance`)
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).method).toBe('POST')
+  })
+
+  it('is ignored while a turn is generating', async () => {
+    // A request that never settles keeps the chamber genuinely in flight.
+    const fetchSpy = stubFetch(
+      async (url) => (url.endsWith('/advance') ? new Promise<Response>(() => {}) : json(fixture())),
+    )
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+
+    fireEvent.click(button('Step'))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('is ignored while the interjection textarea has focus', () => {
+    const fetchSpy = stubAdvance()
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+
+    const box = screen.getByLabelText('Interject') as HTMLTextAreaElement
+    box.focus()
+    expect(document.activeElement).toBe(box)
+
+    fireEvent.keyDown(box, { key: ' ', code: 'Space' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('is ignored while a text input has focus', () => {
+    const fetchSpy = stubAdvance()
+    render(<Chamber initialView={fixture({ turns: [turn({ seq: 0 })] })} />)
+
+    // The chamber has no input of its own, so the focus rule is exercised with
+    // one standing in for any that a future screen might place beside it.
+    const field = document.createElement('input')
+    document.body.appendChild(field)
+    try {
+      field.focus()
+      expect(document.activeElement).toBe(field)
+
+      fireEvent.keyDown(field, { key: ' ', code: 'Space' })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      field.remove()
+    }
+  })
+
+  it('is ignored when the session cannot generate', () => {
+    const fetchSpy = stubAdvance()
+    render(<Chamber initialView={sessionFixture({ status: 'completed' }, [turn({ seq: 0 })])} />)
+
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('chamber synthesis labelling', () => {
   it('labels only the latest of two syntheses Result', () => {
     const turns = [

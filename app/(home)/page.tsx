@@ -8,8 +8,11 @@
  * `force-dynamic` for the same reason the route handlers use it: `next build`
  * must never need `DATABASE_URL`. A connection failure surfaces as an error
  * rather than an empty list (R4).
+ *
+ * The `(home)` route group changes no URL — this is still `/`. It exists purely
+ * so the sessions-shaped `loading.tsx` beside it is scoped to this page instead
+ * of becoming the Suspense fallback for `/personas` and `/councils` too.
  */
-import Link from 'next/link'
 
 import ImportSession from '@/components/import-session'
 import NewSessionForm from '@/components/new-session-form'
@@ -24,17 +27,9 @@ export default async function SessionsPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 p-6">
-      <div className="flex items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">AI Council</h1>
-        <nav className="flex gap-4 text-sm text-slate-600">
-          <Link href="/councils" className="underline underline-offset-2">
-            Councils
-          </Link>
-          <Link href="/personas" className="underline underline-offset-2">
-            Personas
-          </Link>
-        </nav>
-      </div>
+      {/* No link row here: `components/app-header.tsx` owns every navigation
+          link in the app, and the root layout renders it above this page. */}
+      <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
 
       <section aria-labelledby="new-session" className="flex flex-col gap-3">
         <h2 id="new-session" className="text-lg font-medium">
