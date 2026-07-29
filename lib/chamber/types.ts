@@ -22,6 +22,18 @@ export type ChamberTurn = {
   status: 'complete' | 'failed'
   /** The provider's message, verbatim, when `status` is `failed` (PRD §5.4). */
   error: string | null
+  /**
+   * The four fields below are carried for the JSON session document (T-031) and
+   * are never rendered. They are on the wire already — every one is a `turns`
+   * column that `GET /api/sessions/[id]` returns — so naming them here costs
+   * nothing and lets the export be a lossless archive rather than a summary.
+   * `createdAt` is a `Date` on the server render and an ISO string after a
+   * client refetch, per the note at the top of this file.
+   */
+  model: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  createdAt: string | Date
 }
 
 /** Module-local until a caller names it (R2 / knip); surfaced via `ChamberView`. */
@@ -43,6 +55,11 @@ type ChamberSession = {
    * note at the top of this file.
    */
   createdAt: string | Date
+  /**
+   * When the synthesis landed, or null while the session is not completed.
+   * Carried for the JSON session document (T-031), not rendered.
+   */
+  completedAt: string | Date | null
   /**
    * Snapshot rule (PRD §7): the council is rendered from this frozen copy alone.
    * `councilId` is provenance and is deliberately absent from this type so the

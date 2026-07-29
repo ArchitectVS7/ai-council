@@ -110,6 +110,10 @@ describe('route handlers reach the database only through lib/db/repo.ts', () => 
       '@/lib/personas/types',
       '@/lib/session/turns',
       '@/lib/session/view',
+      // The pure document validator (T-031). Like the rest of `@/lib/api/*` it
+      // knows nothing of the database — it only says whether a file is a legal
+      // session document before the repo is asked to store it.
+      '@/lib/transfer/schema',
     ])
     for (const file of ROUTE_FILES) {
       for (const specifier of importSpecifiers(readFileSync(file, 'utf8'))) {
@@ -167,6 +171,7 @@ describe('lib/db/repo.ts', () => {
       'deleteCouncil',
       'replaceCouncilMembers',
       'insertSession',
+      'insertImportedSession',
       'insertTurn',
       'updateTurnInPlace',
       'bumpTurnCursor',
@@ -224,6 +229,7 @@ describe('lib/db/repo.ts', () => {
       'findPersonasByIds',
       'findSessionWithTurns',
       'insertCouncil',
+      'insertImportedSession',
       'insertPersona',
       'insertSession',
       'insertTurn',
@@ -245,5 +251,15 @@ describe('lib/db/repo.ts', () => {
     const body = functionBody(REPO_SOURCE, 'insertSession')
     expect(body).toMatch(/councilId: input\.councilId/)
     expect(body).toMatch(/councilSnapshot: input\.snapshot/)
+  })
+
+  it('imports a session with a null council_id and rolls back a half-written transcript (T-031)', () => {
+    const body = functionBody(REPO_SOURCE, 'insertImportedSession')
+    // PRD §7: a document imported from elsewhere has no provenance here, and the
+    // session still renders entirely from its own snapshot.
+    expect(body).toMatch(/councilId: null/)
+    expect(body).toMatch(/councilSnapshot: input\.session\.councilSnapshot/)
+    // R4: no half-imported session survives a failed transcript write.
+    expect(body).toMatch(/catch[\s\S]*delete\(sessions\)[\s\S]*throw error/)
   })
 })

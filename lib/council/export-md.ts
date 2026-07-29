@@ -105,8 +105,14 @@ export function exportSessionMarkdown(session: SessionExport): string {
   return `${blocks.join('\n\n')}\n`
 }
 
-/** Deterministic download name: `council-session-<topic-slug>-<YYYY-MM-DD>.md`. */
-export function markdownFilename(session: Pick<SessionExport, 'topic' | 'createdAt'>): string {
+/**
+ * The extension-free download name shared by every export of a session:
+ * `council-session-<topic-slug>-<YYYY-MM-DD>`.
+ *
+ * Extracted so the Markdown document and the JSON session document (T-031)
+ * cannot drift into two different slug rules for the same session.
+ */
+export function sessionBasename(session: Pick<SessionExport, 'topic' | 'createdAt'>): string {
   const slug =
     session.topic
       .toLowerCase()
@@ -114,5 +120,10 @@ export function markdownFilename(session: Pick<SessionExport, 'topic' | 'created
       .replace(/^-+|-+$/g, '')
       .slice(0, 60)
       .replace(/-+$/, '') || 'session'
-  return `council-session-${slug}-${isoDate(session.createdAt)}.md`
+  return `council-session-${slug}-${isoDate(session.createdAt)}`
+}
+
+/** Deterministic download name: `council-session-<topic-slug>-<YYYY-MM-DD>.md`. */
+export function markdownFilename(session: Pick<SessionExport, 'topic' | 'createdAt'>): string {
+  return `${sessionBasename(session)}.md`
 }

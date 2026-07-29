@@ -350,6 +350,80 @@ export async function insertSession(input: {
   return session
 }
 
+/**
+ * A validated session document (T-031), as `lib/transfer/schema.ts` produces it.
+ *
+ * Structural, not an import of that module: the repo stays the layer that knows
+ * about columns, and the document format stays the layer that knows about JSON.
+ * Timestamps arrive as ISO strings and are converted to `Date` here, because
+ * this is the only module that knows drizzle's `timestamp` columns want one.
+ */
+type ImportedSession = {
+  session: {
+    topic: string
+    model: string | null
+    status: SessionRow['status']
+    turnCursor: number
+    createdAt: string
+    completedAt: string | null
+    councilSnapshot: CouncilSnapshot
+  }
+  /** Every persisted turn column except the two ids, which this write assigns. */
+  turns: (Omit<NewTurnInput, 'sessionId'> & { createdAt: string })[]
+}
+
+/**
+ * Write an imported session and its whole transcript.
+ *
+ * `councilId` is null on purpose: PRD §7 makes it provenance only, and a
+ * document imported from elsewhere has no provenance in *this* database. The
+ * session still renders entirely from its `councilSnapshot`, which is exactly
+ * what the snapshot rule is for. `updatedAt` is left to the column default so a
+ * freshly imported session sorts to the top of `/`.
+ *
+ * Not wrapped in a transaction — neon-http offers none here, the same
+ * single-convener rationale as `replaceCouncilMembers` — so a failed transcript
+ * write deletes the session row it just made and rethrows. A half-imported
+ * session would be silent corruption, which R4 forbids outright.
+ */
+export async function insertImportedSession(input: ImportedSession): Promise<SessionRow> {
+  const db = getDb()
+
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      topic: input.session.topic,
+      councilId: null,
+      model: input.session.model,
+      councilSnapshot: input.session.councilSnapshot,
+      status: input.session.status,
+      turnCursor: input.session.turnCursor,
+      createdAt: new Date(input.session.createdAt),
+      completedAt:
+        input.session.completedAt === null ? null : new Date(input.session.completedAt),
+    })
+    .returning()
+
+  if (!session) {
+    throw new Error('Imported session insert returned no row.')
+  }
+
+  if (input.turns.length === 0) return session
+
+  try {
+    await db
+      .insert(turns)
+      .values(
+        input.turns.map((turn) => ({ ...turn, sessionId: session.id, createdAt: new Date(turn.createdAt) })),
+      )
+  } catch (error) {
+    await db.delete(sessions).where(eq(sessions.id, session.id))
+    throw error
+  }
+
+  return session
+}
+
 /** A generated or convener-authored transcript row, exactly as it is persisted. */
 export type NewTurnInput = {
   sessionId: string

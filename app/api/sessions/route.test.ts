@@ -7,7 +7,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { insertSession } from '@/lib/db/repo'
+import { insertImportedSession, insertSession } from '@/lib/db/repo'
+import { toSessionDocument } from '@/lib/transfer/document'
 
 import { POST as createSession } from './route'
 
@@ -47,9 +48,18 @@ vi.mock('@/lib/db/repo', () => ({
     model: input.model ?? null,
   })),
   listSessions: vi.fn(async () => []),
+  // Echoes what a real import would return: the stored row, with the ids the
+  // database assigns and `council_id` null (PRD §7 — an imported session has no
+  // provenance here).
+  insertImportedSession: vi.fn(async (input: { session: Record<string, unknown> }) => ({
+    id: SESSION_ID,
+    councilId: null,
+    ...input.session,
+  })),
 }))
 
 const inserted = vi.mocked(insertSession)
+const imported = vi.mocked(insertImportedSession)
 
 function post(body: unknown): Promise<Response> {
   return createSession(
@@ -122,5 +132,158 @@ describe('POST /api/sessions — model override (Amendment A1)', () => {
 
     expect(response.status).toBe(400)
     expect(inserted).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Importing a session document (T-031).
+ *
+ * A document is a *create* that arrives with its transcript attached, so it
+ * enters through this same endpoint, discriminated on `schemaVersion`. These
+ * cases pin the repo contract that `lib/transfer/round-trip.test.ts` mirrors in
+ * its fake store.
+ */
+describe('POST /api/sessions — import (T-031)', () => {
+  const SNAPSHOT = {
+    name: 'Decision Panel',
+    rounds: 2,
+    members: [
+      { name: 'Pragmatist', role: 'Ships things', charter: 'Focus on what is buildable.', color: '#2563eb' },
+      { name: 'Skeptic', role: 'Doubts things', charter: 'Challenge every assumption.', color: '#dc2626' },
+    ],
+  }
+
+  function sessionDocument() {
+    return toSessionDocument({
+      topic: 'Should we ship on Friday?',
+      model: 'claude-opus-5',
+      status: 'completed',
+      turnCursor: 4,
+      createdAt: '2026-07-28T09:15:00.000Z',
+      completedAt: '2026-07-28T10:00:00.000Z',
+      councilSnapshot: SNAPSHOT,
+      turns: [
+        {
+          seq: 0,
+          kind: 'persona',
+          speakerName: 'Pragmatist',
+          round: 1,
+          content: 'Ship it.',
+          status: 'complete',
+          error: null,
+          model: 'claude-opus-5',
+          promptTokens: 100,
+          completionTokens: 20,
+          createdAt: '2026-07-28T09:16:00.000Z',
+        },
+        {
+          seq: 1,
+          kind: 'interjection',
+          speakerName: null,
+          round: 1,
+          content: 'Stay on the rollback question.',
+          status: 'complete',
+          error: null,
+          model: null,
+          promptTokens: null,
+          completionTokens: null,
+          createdAt: '2026-07-28T09:17:00.000Z',
+        },
+        {
+          seq: 2,
+          kind: 'persona',
+          speakerName: 'Skeptic',
+          round: 1,
+          content: '',
+          status: 'failed',
+          error: 'Anthropic request failed (529): overloaded_error',
+          model: 'claude-opus-5',
+          promptTokens: null,
+          completionTokens: null,
+          createdAt: '2026-07-28T09:18:00.000Z',
+        },
+        {
+          seq: 3,
+          kind: 'synthesis',
+          speakerName: 'The Chair',
+          round: 1,
+          content: 'Ship behind a flag.',
+          status: 'complete',
+          error: null,
+          model: 'claude-opus-5',
+          promptTokens: 400,
+          completionTokens: 80,
+          createdAt: '2026-07-28T09:19:00.000Z',
+        },
+      ],
+    })
+  }
+
+  it('persists the document exactly as it arrived, status and cursor included', async () => {
+    const document = sessionDocument()
+    const response = await post(document)
+
+    expect(response.status).toBe(201)
+    expect(inserted).not.toHaveBeenCalled()
+    expect(imported).toHaveBeenCalledTimes(1)
+    // Nothing is re-derived: the repo receives the parsed document unchanged.
+    expect(imported.mock.calls[0][0]).toEqual({
+      session: document.session,
+      turns: document.turns,
+    })
+
+    const body = (await response.json()) as { session: { id: string; councilId: null } }
+    expect(body.session.id).toBe(SESSION_ID)
+    // Snapshot rule (PRD §7): an imported session has no provenance here.
+    expect(body.session.councilId).toBeNull()
+  })
+
+  it('preserves interjections, failed turns, and the synthesis', async () => {
+    await post(sessionDocument())
+
+    const turns = imported.mock.calls[0][0].turns
+    expect(turns.map((turn) => turn.kind)).toEqual([
+      'persona',
+      'interjection',
+      'persona',
+      'synthesis',
+    ])
+    expect(turns[1].speakerName).toBeNull()
+    expect(turns[2]).toMatchObject({
+      status: 'failed',
+      error: 'Anthropic request failed (529): overloaded_error',
+    })
+  })
+
+  it('400s on an unreadable schemaVersion, surfacing the zod issue', async () => {
+    const response = await post({ ...sessionDocument(), schemaVersion: 99 })
+
+    expect(response.status).toBe(400)
+    expect(imported).not.toHaveBeenCalled()
+
+    const body = (await response.json()) as { error: string; issues: { message: string }[] }
+    expect(body.error).toBe('Invalid session document.')
+    expect(body.issues.map((issue) => issue.message)).toContain(
+      'Unsupported schemaVersion; this build reads version 1.',
+    )
+  })
+
+  it('400s on a document whose transcript is out of order', async () => {
+    const document = sessionDocument()
+    const response = await post({
+      ...document,
+      turns: [document.turns[1], document.turns[0]],
+    })
+
+    expect(response.status).toBe(400)
+    expect(imported).not.toHaveBeenCalled()
+  })
+
+  it('leaves the ordinary create path alone when no schemaVersion is present', async () => {
+    const response = await post({ topic: 'Hiring plan', councilId: COUNCIL_ID })
+
+    expect(response.status).toBe(201)
+    expect(imported).not.toHaveBeenCalled()
+    expect(inserted).toHaveBeenCalledTimes(1)
   })
 })

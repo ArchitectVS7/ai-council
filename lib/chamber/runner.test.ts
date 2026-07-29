@@ -111,6 +111,10 @@ function turn(partial: Partial<ChamberTurn>): ChamberTurn {
     content: 'text',
     status: 'complete',
     error: null,
+    model: null,
+    promptTokens: null,
+    completionTokens: null,
+    createdAt: '2026-07-28T09:16:00.000Z',
     ...partial,
   }
 }

@@ -29,6 +29,7 @@ import type { StreamingTurn } from '@/lib/chamber/stream'
 import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
 import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 import { MAX_GENERATED_TURNS } from '@/lib/council/scheduler'
+import { sessionJsonFilename, toSessionDocument } from '@/lib/transfer/document'
 
 /** The two endpoints that stream their turn token by token (T-030). */
 type StreamAction = 'advance' | 'synthesize'
@@ -296,19 +297,21 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     }
   }, [buildMarkdown])
 
-  const onDownloadMarkdown = useCallback(() => {
+  /**
+   * Hand a string to the browser as a file. Both download buttons go through
+   * here; `build` is called inside the try so a serializer refusal (an
+   * unreadable timestamp, a turn with no speaker) surfaces in the notice box
+   * rather than downloading a broken file.
+   */
+  const download = useCallback((build: () => string, type: string, filename: string) => {
     setNotice(null)
     setCopied(false)
     let url: string | null = null
     try {
-      const blob = new Blob([buildMarkdown()], { type: 'text/markdown' })
-      url = URL.createObjectURL(blob)
+      url = URL.createObjectURL(new Blob([build()], { type }))
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = markdownFilename({
-        topic: view.session.topic,
-        createdAt: view.session.createdAt,
-      })
+      anchor.download = filename
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -317,7 +320,28 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
     } finally {
       if (url !== null) URL.revokeObjectURL(url)
     }
-  }, [buildMarkdown, view.session.topic, view.session.createdAt])
+  }, [])
+
+  const onDownloadMarkdown = useCallback(() => {
+    download(
+      buildMarkdown,
+      'text/markdown',
+      markdownFilename({ topic: view.session.topic, createdAt: view.session.createdAt }),
+    )
+  }, [download, buildMarkdown, view.session.topic, view.session.createdAt])
+
+  /**
+   * The whole session as a portable JSON document (T-031): configuration,
+   * snapshot, status, and every turn including the failed ones. `/` imports it
+   * back through `POST /api/sessions`.
+   */
+  const onDownloadJson = useCallback(() => {
+    download(
+      () => JSON.stringify(toSessionDocument({ ...view.session, turns: view.turns }), null, 2),
+      'application/json',
+      sessionJsonFilename({ topic: view.session.topic, createdAt: view.session.createdAt }),
+    )
+  }, [download, view.session, view.turns])
 
   // Mirrors the server's refusal rules so the UI refuses exactly what the API
   // would refuse — no control here promises something the server will deny.
@@ -449,6 +473,13 @@ export default function Chamber({ initialView }: { initialView: ChamberView }) {
           onClick={onDownloadMarkdown}
         >
           Download .md
+        </button>
+        <button
+          type="button"
+          className="rounded border border-slate-300 px-3 py-2 text-sm font-medium"
+          onClick={onDownloadJson}
+        >
+          Download .json
         </button>
         {copied ? <span className="text-sm text-slate-600">Copied to the clipboard.</span> : null}
       </section>

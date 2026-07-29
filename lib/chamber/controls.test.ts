@@ -27,6 +27,10 @@ function turn(overrides: Partial<ChamberTurn> & { seq: number }): ChamberTurn {
     content: 'Ship it.',
     status: 'complete',
     error: null,
+    model: null,
+    promptTokens: null,
+    completionTokens: null,
+    createdAt: '2026-07-28T09:16:00.000Z',
     ...overrides,
   }
 }
@@ -40,6 +44,7 @@ function view(overrides: { status?: ChamberView['session']['status']; turnCursor
       turnCursor: overrides.turnCursor ?? 3,
       model: null,
       createdAt: '2026-07-28T09:15:00.000Z',
+      completedAt: null,
       councilSnapshot: SNAPSHOT,
     },
     turns: overrides.turns ?? [turn({ seq: 0 })],

@@ -11,6 +11,7 @@
  */
 import Link from 'next/link'
 
+import ImportSession from '@/components/import-session'
 import NewSessionForm from '@/components/new-session-form'
 import SessionList from '@/components/session-list'
 import { listSessions } from '@/lib/db/repo'
@@ -43,6 +44,15 @@ export default async function SessionsPage() {
             string so the model picker can offer that provider's curated list
             (PRD Amendment A1). No key material crosses the boundary. */}
         <NewSessionForm provider={getProviderName()} />
+      </section>
+
+      <section aria-labelledby="import-session" className="flex flex-col gap-3">
+        <h2 id="import-session" className="text-lg font-medium">
+          Import session
+        </h2>
+        {/* The counterpart of the chamber's Download .json (T-031). No server
+            data is needed: the file itself is the whole request. */}
+        <ImportSession />
       </section>
 
       <section aria-labelledby="sessions" className="flex flex-col gap-3">

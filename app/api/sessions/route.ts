@@ -4,11 +4,16 @@
  *
  * Database access goes exclusively through `lib/db/repo.ts`; snapshot
  * construction is the pure function in `lib/council/snapshot.ts` (PRD §8).
+ *
+ * `POST` also accepts a session document (T-031). Importing one is a *create*
+ * that arrives with its transcript already attached, so it enters here rather
+ * than through a route PRD §8's complete list does not name.
  */
 import { badRequest, notFound, serverError, unprocessable } from '@/lib/api/http'
 import { createSessionSchema } from '@/lib/api/schemas'
 import { buildCouncilSnapshot } from '@/lib/council/snapshot'
-import { findCouncilWithMembers, insertSession, listSessions } from '@/lib/db/repo'
+import { findCouncilWithMembers, insertImportedSession, insertSession, listSessions } from '@/lib/db/repo'
+import { sessionDocumentSchema } from '@/lib/transfer/schema'
 
 // Handlers read the database on every request; nothing here may be evaluated at
 // build time, where `DATABASE_URL` is deliberately absent.
@@ -21,6 +26,24 @@ export async function POST(request: Request) {
       body = await request.json()
     } catch {
       return badRequest('Request body must be valid JSON.')
+    }
+
+    // `schemaVersion` is the discriminator: only a session document carries it,
+    // and the ordinary create schema is strict, so the two shapes cannot be
+    // confused for one another.
+    if (typeof body === 'object' && body !== null && 'schemaVersion' in body) {
+      const document = sessionDocumentSchema.safeParse(body)
+      if (!document.success) {
+        return badRequest('Invalid session document.', document.error.issues)
+      }
+      // Status, turn cursor, and every timestamp are preserved exactly as the
+      // document carried them; nothing about the imported session is re-derived.
+      // `schemaVersion` is a wire concern and is deliberately not stored.
+      const session = await insertImportedSession({
+        session: document.data.session,
+        turns: document.data.turns,
+      })
+      return Response.json({ session }, { status: 201 })
     }
 
     const parsed = createSessionSchema.safeParse(body)

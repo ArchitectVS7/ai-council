@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChamberTurn, ChamberView } from '@/lib/chamber/types'
 import { exportSessionMarkdown, markdownFilename } from '@/lib/council/export-md'
 import { encodeServerEvent } from '@/lib/sse'
+import { sessionJsonFilename, toSessionDocument } from '@/lib/transfer/document'
 
 import Chamber from './chamber'
 
@@ -37,6 +38,7 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
       turnCursor: 3,
       model: null,
       createdAt: CREATED_AT,
+      completedAt: null,
       councilSnapshot: SNAPSHOT,
     },
     turns: [
@@ -49,6 +51,10 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
         content: 'The build is green; ship it.',
         status: 'complete',
         error: null,
+        model: 'claude-sonnet-5',
+        promptTokens: 120,
+        completionTokens: 40,
+        createdAt: '2026-07-28T09:16:00.000Z',
       },
       {
         id: 'turn-b',
@@ -59,6 +65,10 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
         content: 'The council leans toward shipping with a rollback plan.',
         status: 'complete',
         error: null,
+        model: 'claude-sonnet-5',
+        promptTokens: 300,
+        completionTokens: 90,
+        createdAt: '2026-07-28T09:17:00.000Z',
       },
       {
         id: 'turn-c',
@@ -69,6 +79,10 @@ function fixture(overrides: Partial<ChamberView> = {}): ChamberView {
         content: '',
         status: 'failed',
         error: PROVIDER_ERROR,
+        model: 'claude-sonnet-5',
+        promptTokens: null,
+        completionTokens: null,
+        createdAt: '2026-07-28T09:18:00.000Z',
       },
     ],
     mockMode: true,
@@ -510,6 +524,10 @@ function turn(overrides: Partial<ChamberTurn> & { seq: number }): ChamberTurn {
     content: 'The build is green; ship it.',
     status: 'complete',
     error: null,
+    model: 'claude-sonnet-5',
+    promptTokens: 120,
+    completionTokens: 40,
+    createdAt: '2026-07-28T09:16:00.000Z',
     ...overrides,
   }
 }
@@ -791,12 +809,13 @@ describe('chamber export', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders both export buttons, live even on a completed session', () => {
+  it('renders all three export buttons, live even on a completed session', () => {
     const view = fixture()
     render(<Chamber initialView={{ ...view, session: { ...view.session, status: 'completed' } }} />)
 
     expect(button('Copy Markdown').disabled).toBe(false)
     expect(button('Download .md').disabled).toBe(false)
+    expect(button('Download .json').disabled).toBe(false)
   })
 
   it('copies exactly what the serializer produces and confirms it', async () => {
@@ -829,6 +848,44 @@ describe('chamber export', () => {
     expect(downloads[0].endsWith('.md')).toBe(true)
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('downloads an application/json blob of the whole session document (T-031)', async () => {
+    const fetchSpy = stubFetch(async () => json(fixture()))
+    const view = fixture()
+    render(<Chamber initialView={view} />)
+
+    fireEvent.click(button('Download .json'))
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    expect(blob.type).toBe('application/json')
+    expect(JSON.parse(await readBlob(blob))).toEqual(
+      toSessionDocument({ ...view.session, turns: view.turns }),
+    )
+
+    expect(downloads).toEqual([
+      sessionJsonFilename({ topic: view.session.topic, createdAt: view.session.createdAt }),
+    ])
+    expect(downloads[0].endsWith('.json')).toBe(true)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+    // Export reads what is already on screen; it asks the server for nothing.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps failed turns in the JSON document, unlike the Markdown one', async () => {
+    stubFetch(async () => json(fixture()))
+    const view = fixture()
+    render(<Chamber initialView={view} />)
+
+    fireEvent.click(button('Download .json'))
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    const document = JSON.parse(await readBlob(createObjectURL.mock.calls[0][0] as Blob)) as {
+      turns: { status: string; error: string | null }[]
+    }
+    expect(document.turns).toHaveLength(view.turns.length)
+    expect(document.turns.filter((turn) => turn.status === 'failed')[0].error).toBe(PROVIDER_ERROR)
   })
 
   it('surfaces a clipboard failure instead of claiming success', async () => {
